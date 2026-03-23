@@ -184,6 +184,7 @@ export default function App() {
   const [areaF,    setAreaF]    = useState("Todas");
   const [dragging, setDragging] = useState(null);
   const [dragOver, setDragOver] = useState(null);
+  const [ghostPos, setGhostPos] = useState(null); // {x,y,label,color}
   const [picker,   setPicker]   = useState(null);
   const [userModal,setUserModal]= useState(false);
   const [shiftModal,setShiftModal]=useState(false);
@@ -193,9 +194,44 @@ export default function App() {
   const [profileUser, setProfileUser] = useState(null);
   const [collapsed,setCollapsed]= useState({turnos:false,estados:false,alertas:false});
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [copied,   setCopied]   = useState(null); // {val} clipboard
+  const [copied,   setCopied]   = useState(null);
   const [reportModal, setReportModal] = useState(false);
+  const [templateModal, setTemplateModal] = useState(false);
+  const [templates, setTemplates] = useState(()=>JSON.parse(localStorage.getItem("so_templates")||"[]"));
   const [monthRef, setMonthRef] = useState(()=>{ const n=new Date(); return{y:n.getFullYear(),m:n.getMonth()}; });
+
+  // ── pointer-drag ghost tracking ──
+  useEffect(()=>{
+    if(!dragging) return;
+    const onMove=e=>{
+      const p=e.touches?e.touches[0]:e;
+      setGhostPos({x:p.clientX,y:p.clientY});
+      // detect which cell is under cursor
+      const el=document.elementFromPoint(p.clientX,p.clientY);
+      const cell=el?.closest("[data-cellkey]");
+      setDragOver(cell?cell.getAttribute("data-cellkey"):null);
+    };
+    const onUp=e=>{
+      document.body.classList.remove("is-dragging");
+      // final drop
+      const p=e.touches?e.changedTouches[0]:e;
+      const el=document.elementFromPoint(p.clientX,p.clientY);
+      const cell=el?.closest("[data-cellkey]");
+      if(cell){
+        const [day,uid]=cell.getAttribute("data-cellkey").split("||");
+        if(dragging.t==="user") setPicker({day,uid:dragging.uid});
+        else if(dragging.t==="shift") setCell_ref.current(day,uid,dragging.id);
+        else if(dragging.t==="special") setCell_ref.current(day,uid,dragging.id);
+      }
+      setDragging(null); setGhostPos(null); setDragOver(null);
+    };
+    window.addEventListener("pointermove",onMove,{passive:true});
+    window.addEventListener("pointerup",onUp);
+    return()=>{ window.removeEventListener("pointermove",onMove); window.removeEventListener("pointerup",onUp); };
+  },[dragging]);
+
+  const setCell_ref=useRef(null);
+  setCell_ref.current=(day,uid,val)=>assignW(day,uid,val);
 
   const users = [...FIXED_USERS, ...extra];
   const visible = areaF==="Todas" ? users : users.filter(u=>u.area===areaF);
@@ -206,6 +242,7 @@ export default function App() {
   useEffect(()=>{ localStorage.setItem("so_extra",   JSON.stringify(extra));    },[extra]);
   useEffect(()=>{ localStorage.setItem("so_shifts",  JSON.stringify(shifts));   },[shifts]);
   useEffect(()=>{ localStorage.setItem("so_schedule",JSON.stringify(schedule)); },[schedule]);
+  useEffect(()=>{ localStorage.setItem("so_templates",JSON.stringify(templates)); },[templates]);
   useEffect(()=>{ setAlerts(checkRules(schedule,visible,shifts,wk)); },[schedule,extra,areaF,shifts,wk]);
 
   const setCell=(wk2,dn,uid,val)=>setSchedule(p=>({...p,[wk2]:{...(p[wk2]||{}),[`${dn}-${uid}`]:val}}));
@@ -217,8 +254,59 @@ export default function App() {
 
   const userHoursW=uid=>{ let t=0; DAYS.forEach(d=>{ const c=wSched[`${d}-${uid}`]; if(!c||isSpec(c)) return; const s=shifts.find(x=>x.id===c); if(s) t+=shiftH(s); }); return t; };
 
-  function dropW(day,uid){ if(!dragging) return; setDragOver(null); if(dragging.t==="user") setPicker({day,uid:dragging.uid}); else if(dragging.t==="shift") assignW(day,uid,dragging.id); else if(dragging.t==="special") assignW(day,uid,dragging.id); setDragging(null); }
-  function dropM(date,uid){ if(!dragging) return; setDragOver(null); if(dragging.t==="user") setPicker({date,uid:dragging.uid}); else if(dragging.t==="shift") assignM(date,uid,dragging.id); else if(dragging.t==="special") assignM(date,uid,dragging.id); setDragging(null); }
+  // ── templates ──
+  function saveAsTemplate(name){
+    // Store current week's assignments keyed by userId+day (relative, not by date)
+    const data={};
+    users.forEach(u=>{
+      DAYS.forEach(day=>{
+        const v=wSched[`${day}-${u.id}`];
+        if(v) data[`${day}-${u.id}`]=v;
+      });
+    });
+    const tpl={ id:`tpl${Date.now()}`, name, data, savedAt: new Date().toLocaleDateString("es-CL"), weekLabel:weekLabel(wo) };
+    setTemplates(p=>[tpl,...p]);
+  }
+
+  function applyTemplate(tpl, targetWo){
+    // Apply to a single week
+    const wk2=wKey(targetWo);
+    setSchedule(p=>({ ...p, [wk2]: { ...(p[wk2]||{}), ...tpl.data } }));
+  }
+
+  function applyTemplateMonth(tpl, year, month){
+    // Apply to every week of the month
+    const allDates=monthDates(year,month);
+    // Get unique week offsets in this month
+    const weekOffsets=[...new Set(allDates.map(d=>dateToWO(d)))];
+    setSchedule(p=>{
+      const next={...p};
+      weekOffsets.forEach(wo2=>{
+        const wk2=wKey(wo2);
+        next[wk2]={ ...(next[wk2]||{}), ...tpl.data };
+      });
+      return next;
+    });
+  }
+
+  function ghostLabel(d){ if(!d) return {label:"",color:"#888"}; if(d.t==="user"){ const u=users.find(x=>x.id===d.uid); return {label:u?.name||"",color:u?.color||"#888"}; } if(d.t==="shift"){ const s=shifts.find(x=>x.id===d.id); return {label:s?.name||"",color:s?.color||"#888"}; } if(d.t==="special"){ const st=Object.values(SPECIAL).find(x=>x.id===d.id); return {label:st?.label||"",color:st?.color||"#888"}; } return {label:"",color:"#888"}; }
+
+  function startDrag(e,payload){
+    e.preventDefault();
+    e.stopPropagation();
+    document.body.classList.add("is-dragging");
+    setDragging(payload);
+    const p=e.touches?e.touches[0]:e;
+    setGhostPos({x:p.clientX,y:p.clientY});
+  }
+
+  function handleCellPointerEnter(ck){ if(dragging) setDragOver(ck); }
+  function handleCellPointerLeave(){ if(dragging) setDragOver(null); }
+  function handleCellPointerUp(day,uid){ if(!dragging) return; if(dragging.t==="user") setPicker({day,uid:dragging.uid}); else if(dragging.t==="shift") assignW(day,uid,dragging.id); else if(dragging.t==="special") assignW(day,uid,dragging.id); setDragging(null); setGhostPos(null); setDragOver(null); }
+  function handleMonthCellPointerUp(date,uid){ if(!dragging) return; if(dragging.t==="user") setPicker({date,uid:dragging.uid}); else if(dragging.t==="shift") assignM(date,uid,dragging.id); else if(dragging.t==="special") assignM(date,uid,dragging.id); setDragging(null); setGhostPos(null); setDragOver(null); }
+
+  function dropW(day,uid){ handleCellPointerUp(day,uid); }
+  function dropM(date,uid){ handleMonthCellPointerUp(date,uid); }
   function tog(k){ setCollapsed(p=>({...p,[k]:!p[k]})); }
 
   function exportXLSX(){
@@ -254,7 +342,7 @@ export default function App() {
   }
 
   function saveBackup() {
-    const keys = ["so_extra","so_shifts","so_schedule","so_rot_names","so_fix_names","so_colacion","so_plancha"];
+    const keys = ["so_extra","so_shifts","so_schedule","so_rot_names","so_fix_names","so_colacion","so_plancha","so_templates"];
     const data = {};
     keys.forEach(k=>{ const v=localStorage.getItem(k); if(v) data[k]=v; });
     data.__version = "1";
@@ -277,7 +365,7 @@ export default function App() {
         try {
           const data = JSON.parse(ev.target.result);
           if(!data.__version) { alert("Archivo no válido."); return; }
-          const keys = ["so_extra","so_shifts","so_schedule","so_rot_names","so_fix_names","so_colacion","so_plancha"];
+          const keys = ["so_extra","so_shifts","so_schedule","so_rot_names","so_fix_names","so_colacion","so_plancha","so_templates"];
           keys.forEach(k=>{ if(data[k]!=null) localStorage.setItem(k,data[k]); });
           window.location.reload();
         } catch { alert("Error al leer el archivo."); }
@@ -295,47 +383,61 @@ export default function App() {
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
         *{box-sizing:border-box;margin:0;padding:0;}
-        ::-webkit-scrollbar{width:3px;height:3px;}
-        ::-webkit-scrollbar-thumb{background:#E8E8E8;border-radius:2px;}
-        .btn{cursor:pointer;border:none;font-family:'Inter',sans-serif;transition:opacity .13s;}
-        .btn:hover{opacity:.7;}
-        .chip{cursor:grab;}
-        .chip:active{cursor:grabbing;opacity:.7;}
-        .tab{cursor:pointer;padding:5px 12px;border-radius:5px;font-size:13px;font-weight:500;color:#666;border:none;background:none;font-family:'Inter',sans-serif;transition:all .13s;}
+        ::-webkit-scrollbar{width:4px;height:4px;}
+        ::-webkit-scrollbar-thumb{background:#E0E0E0;border-radius:4px;}
+        ::-webkit-scrollbar-track{background:transparent;}
+        .btn{cursor:pointer;border:none;font-family:'Inter',sans-serif;transition:all .18s cubic-bezier(.4,0,.2,1);}
+        .btn:hover{opacity:.72;}
+        .btn:active{transform:scale(.97);}
+        .tab{cursor:pointer;padding:6px 13px;border-radius:6px;font-size:13px;font-weight:500;color:#666;border:none;background:none;font-family:'Inter',sans-serif;transition:all .15s;}
         .tab.active{background:#111;color:#fff;}
         .tab:hover:not(.active){background:#F3F4F6;color:#111;}
-        .vtab{cursor:pointer;padding:3px 9px;border-radius:5px;font-size:12px;font-weight:500;color:#888;border:1px solid transparent;background:none;font-family:'Inter',sans-serif;transition:all .13s;}
+        .vtab{cursor:pointer;padding:4px 10px;border-radius:5px;font-size:12px;font-weight:500;color:#888;border:1px solid transparent;background:none;font-family:'Inter',sans-serif;transition:all .15s;}
         .vtab.active{border-color:#D9D9D9;background:#fff;color:#111;box-shadow:0 1px 3px rgba(0,0,0,.06);}
-        .atab{cursor:pointer;padding:3px 9px;border-radius:5px;font-size:12px;font-weight:500;color:#888;border:none;background:none;font-family:'Inter',sans-serif;transition:all .13s;}
+        .atab{cursor:pointer;padding:4px 10px;border-radius:5px;font-size:12px;font-weight:500;color:#888;border:none;background:none;font-family:'Inter',sans-serif;transition:all .15s;}
         .atab.active{background:#111;color:#fff;}
-        .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.15);display:flex;align-items:center;justify-content:center;z-index:100;}
-        .modal{background:#fff;border-radius:12px;padding:24px;width:356px;box-shadow:0 8px 32px rgba(0,0,0,.1);}
-        input,select{width:100%;padding:7px 10px;border:1px solid #E5E7EB;border-radius:6px;font-size:13px;font-family:'Inter',sans-serif;outline:none;color:#111;}
-        input:focus,select:focus{border-color:#555;}
-        .lbl{font-size:10px;font-weight:700;color:#AAA;display:block;margin-bottom:4px;margin-top:12px;text-transform:uppercase;letter-spacing:.6px;}
-        .nav-btn{background:none;border:1px solid #E8E8E8;border-radius:5px;padding:4px 9px;cursor:pointer;font-size:13px;color:#444;font-family:'Inter',sans-serif;transition:background .12s;}
-        .nav-btn:hover{background:#F5F5F5;}
-        .wcell{transition:background .1s;cursor:pointer;}
-        .wcell:hover{background:#FAFAFA!important;}
-        .drag-ov{outline:1.5px dashed #CCC!important;background:#F8F8F8!important;}
+        .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.18);display:flex;align-items:center;justify-content:center;z-index:100;animation:fadeIn .15s ease;}
+        @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+        @keyframes slideUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+        .modal{background:#fff;border-radius:14px;padding:26px;width:360px;box-shadow:0 12px 40px rgba(0,0,0,.12);animation:slideUp .18s cubic-bezier(.4,0,.2,1);}
+        input,select{width:100%;padding:8px 11px;border:1px solid #E5E7EB;border-radius:7px;font-size:13px;font-family:'Inter',sans-serif;outline:none;color:#111;transition:border-color .15s;}
+        input:focus,select:focus{border-color:#555;box-shadow:0 0 0 3px rgba(0,0,0,.05);}
+        .lbl{font-size:10px;font-weight:700;color:#AAA;display:block;margin-bottom:4px;margin-top:14px;text-transform:uppercase;letter-spacing:.7px;}
+        .nav-btn{background:none;border:1px solid #E8E8E8;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:13px;color:#444;font-family:'Inter',sans-serif;transition:all .15s;}
+        .nav-btn:hover{background:#F5F5F5;border-color:#D0D0D0;}
+        .nav-btn:active{transform:scale(.97);}
+        .wcell{transition:background .12s,box-shadow .12s;cursor:pointer;position:relative;}
+        .wcell:hover{background:#F8F8F8!important;}
+        .drag-ov{background:#EEF4FF!important;box-shadow:inset 0 0 0 2px #4B6CB7!important;}
+        .wrow{transition:background .1s;}
         .wrow:hover td{background:#FAFAFA;}
         .wrow:hover td:first-child{background:#FAFAFA!important;}
-        .rm{opacity:0!important;transition:opacity .12s!important;}
-        .wrow:hover .rm{opacity:1!important;}
-        .sec-hdr{display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:4px 0 3px;user-select:none;border-bottom:1px solid #F0F0F0;margin-bottom:6px;}
+        .rm{opacity:0!important;transition:opacity .15s!important;}
+        .wrow:hover .rm,.cell-filled:hover .rm{opacity:1!important;}
+        .sec-hdr{display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:5px 0 4px;user-select:none;border-bottom:1px solid #F0F0F0;margin-bottom:8px;}
         .sec-ttl{font-size:11px;font-weight:600;color:#222;letter-spacing:.1px;}
         .sec-hdr:hover .sec-ttl{color:#000;}
-        .tog{width:14px;height:14px;border-radius:50%;background:#F0F0F0;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:background .13s;}
+        .tog{width:14px;height:14px;border-radius:50%;background:#F0F0F0;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:background .15s;}
         .tog.open{background:#111;}
-        .tog span{display:block;width:6px;height:1.5px;background:#888;border-radius:1px;transition:background .13s;}
+        .tog span{display:block;width:6px;height:1.5px;background:#888;border-radius:1px;transition:background .15s;}
         .tog.open span{background:#fff;}
-        .cal-cell{transition:background .1s;border-right:1px solid #F0F0F0;}
+        .cal-cell{transition:background .12s;border-right:1px solid #F0F0F0;}
         .cal-cell:hover{background:#FAFAFA!important;}
         .task-row:hover{background:#FAFAFA;}
         .urow:hover{background:#FAFAFA;}
-        .sb-row{display:flex;align-items:flex-start;gap:8px;padding:5px 3px;border-radius:4px;cursor:grab;transition:background .12s;margin-bottom:1px;}
+        .sb-row{display:flex;align-items:flex-start;gap:8px;padding:6px 4px;border-radius:6px;cursor:grab;transition:background .12s,transform .12s,box-shadow .12s;margin-bottom:2px;user-select:none;}
         .sb-row:hover{background:#F5F5F5;}
-        .sb-row:active{cursor:grabbing;opacity:.6;}
+        .sb-row:active{cursor:grabbing;transform:scale(.98);opacity:.7;}
+        .sb-row.dragging-active{opacity:.4;transform:scale(.96);}
+        .drag-ghost{position:fixed;pointer-events:none;z-index:9999;opacity:.92;transform:rotate(1.5deg) scale(1.04);transition:none;filter:drop-shadow(0 8px 24px rgba(0,0,0,.18));animation:ghostPop .12s cubic-bezier(.4,0,.2,1);}
+        @keyframes ghostPop{from{opacity:0;transform:rotate(1.5deg) scale(.9)}to{opacity:.92;transform:rotate(1.5deg) scale(1.04)}}
+        .cell-filled{animation:cellIn .15s cubic-bezier(.4,0,.2,1);}
+        @keyframes cellIn{from{opacity:0;transform:scale(.93)}to{opacity:1;transform:scale(1)}}
+        .no-select{user-select:none!important;-webkit-user-select:none!important;-moz-user-select:none!important;}
+        body.is-dragging{user-select:none!important;-webkit-user-select:none!important;-moz-user-select:none!important;cursor:grabbing!important;}
+        body.is-dragging *{user-select:none!important;-webkit-user-select:none!important;-moz-user-select:none!important;}
+        .cell-drop-hint{position:absolute;inset:3px;border-radius:6px;border:2px dashed #4B6CB7;background:#EEF4FF;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .12s;pointer-events:none;}
+        .drag-ov .cell-drop-hint{opacity:1;}
       `}</style>
 
       {/* ── NAV ── */}
@@ -347,7 +449,17 @@ export default function App() {
           ))}
         </div>
         <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:5}}>
-          {/* Backup save — solo flecha abajo */}
+          {/* Templates */}
+          <button className="btn" onClick={()=>setTemplateModal(true)} title="Plantillas de horario"
+            style={{background:"none",border:"1px solid #E8E8E8",borderRadius:6,padding:"6px 7px",display:"flex",alignItems:"center",justifyContent:"center"}}>
+            <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+              <rect x="1" y="1" width="4.5" height="4.5" rx="1" stroke="#888" strokeWidth="1.3"/>
+              <rect x="7.5" y="1" width="4.5" height="4.5" rx="1" stroke="#888" strokeWidth="1.3"/>
+              <rect x="1" y="7.5" width="4.5" height="4.5" rx="1" stroke="#888" strokeWidth="1.3"/>
+              <rect x="7.5" y="7.5" width="4.5" height="4.5" rx="1" stroke="#888" strokeWidth="1.3"/>
+            </svg>
+          </button>
+          {/* Backup save */}
           <button className="btn" onClick={saveBackup} title="Guardar copia de seguridad"
             style={{background:"none",border:"1px solid #E8E8E8",borderRadius:6,padding:"6px 7px",display:"flex",alignItems:"center",justifyContent:"center"}}>
             <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
@@ -394,9 +506,10 @@ export default function App() {
                 <span className={`tog ${!collapsed.turnos?"open":""}`}><span/></span>
               </div>
               {!collapsed.turnos && shifts.map(s=>(
-                <div key={s.id} draggable onDragStart={()=>setDragging({t:"shift",id:s.id})} onDragEnd={()=>setDragging(null)}
-                  className="sb-row">
-                  <div style={{width:7,height:7,borderRadius:"50%",background:s.color,flexShrink:0,marginTop:2}}/>
+                <div key={s.id}
+                  onPointerDown={e=>startDrag(e,{t:"shift",id:s.id})}
+                  className="sb-row no-select">
+                  <div style={{width:8,height:8,borderRadius:"50%",background:s.color,flexShrink:0,marginTop:2}}/>
                   <div>
                     <div style={{fontSize:11,fontWeight:500,color:"#222",lineHeight:1.3}}>{s.name}</div>
                     <div style={{fontSize:10,color:"#AAA",marginTop:1}}>{s.start}–{s.end}</div>
@@ -412,9 +525,10 @@ export default function App() {
                 <span className={`tog ${!collapsed.estados?"open":""}`}><span/></span>
               </div>
               {!collapsed.estados && Object.values(SPECIAL).map(st=>(
-                <div key={st.id} draggable onDragStart={()=>setDragging({t:"special",id:st.id})} onDragEnd={()=>setDragging(null)}
-                  className="sb-row">
-                  <div style={{width:7,height:7,borderRadius:"50%",background:st.color,flexShrink:0,marginTop:2}}/>
+                <div key={st.id}
+                  onPointerDown={e=>startDrag(e,{t:"special",id:st.id})}
+                  className="sb-row no-select">
+                  <div style={{width:8,height:8,borderRadius:"50%",background:st.color,flexShrink:0,marginTop:2}}/>
                   <div style={{flex:1}}>
                     <div style={{fontSize:11,fontWeight:500,color:"#222",lineHeight:1.3}}>{st.label}</div>
                     <div style={{fontSize:10,color:"#AAA",marginTop:1}}>{st.sym}{st.hidden?" · interno":""}</div>
@@ -475,10 +589,11 @@ export default function App() {
 
             {view==="week"
               ? <WeekGrid users={visible} shifts={shifts} dates={dates} wSched={wSched}
-                  dragging={dragging} dragOver={dragOver} setDragOver={setDragOver}
-                  setPicker={setPicker} dropW={dropW} removeW={removeW}
+                  dragging={dragging} dragOver={dragOver}
+                  setPicker={setPicker} removeW={removeW}
                   userHoursW={userHoursW} areaF={areaF} onUserClick={u=>setProfileUser(u)}
-                  copied={copied} setCopied={setCopied} assignW={assignW} />
+                  copied={copied} setCopied={setCopied} assignW={assignW}
+                  startDrag={startDrag} />
               : <MonthCal users={visible} shifts={shifts} schedule={schedule} monthRef={monthRef}
                   dragging={dragging} dragOver={dragOver} setDragOver={setDragOver}
                   setPicker={setPicker} dropM={dropM} removeM={removeM} setDragging={setDragging} />
@@ -542,6 +657,15 @@ export default function App() {
 
       {reportModal && <ReportModal users={users} shifts={shifts} schedule={schedule} wo={wo} monthRef={monthRef} onClose={()=>setReportModal(false)} />}
 
+      {templateModal && <TemplateModal
+        templates={templates} setTemplates={setTemplates}
+        wo={wo} monthRef={monthRef}
+        currentWeekLabel={weekLabel(wo)}
+        onSave={saveAsTemplate}
+        onApplyWeek={(tpl,wo2)=>applyTemplate(tpl,wo2)}
+        onApplyMonth={(tpl,y,m)=>applyTemplateMonth(tpl,y,m)}
+        onClose={()=>setTemplateModal(false)} />}}
+
       {profileUser && <ProfileModal user={profileUser} users={users} shifts={shifts} schedule={schedule}
         onClose={()=>setProfileUser(null)} onEdit={u=>{ setEditUser(u); setUserModal(true); setProfileUser(null); }} />}
 
@@ -556,12 +680,15 @@ export default function App() {
       {shiftModal && <ShiftModal initial={editShift}
         onSave={s=>{ if(editShift) setShifts(p=>p.map(x=>x.id===editShift.id?{...x,...s}:x)); else setShifts(p=>[...p,{...s,id:`sx${Date.now()}`}]); setShiftModal(false); setEditShift(null); }}
         onClose={()=>{ setShiftModal(false); setEditShift(null); }} />}
+
+      {/* ── DRAG GHOST ── */}
+      {dragging && ghostPos && (()=>{ const {label,color}=ghostLabel(dragging); return <div className="drag-ghost" style={{left:ghostPos.x-50,top:ghostPos.y-18,width:110,padding:"7px 12px",background:"#fff",border:`2px solid ${color}`,borderRadius:8,fontSize:12,fontWeight:600,color,display:"flex",alignItems:"center",gap:6,whiteSpace:"nowrap",overflow:"hidden"}}><div style={{width:8,height:8,borderRadius:"50%",background:color,flexShrink:0}}/>{label}</div>; })()}
     </div>
   );
 }
 
 // ─── WEEK GRID ────────────────────────────────────────────────────────────────
-function WeekGrid({ users, shifts, dates, wSched, dragging, dragOver, setDragOver, setPicker, dropW, removeW, userHoursW, areaF, onUserClick, copied, setCopied, assignW }) {
+function WeekGrid({ users, shifts, dates, wSched, dragging, dragOver, setPicker, removeW, userHoursW, areaF, onUserClick, copied, setCopied, assignW, startDrag }) {
   const today=new Date(); today.setHours(0,0,0,0);
   const showSep=areaF==="Todas";
   const rows=[];
@@ -569,63 +696,65 @@ function WeekGrid({ users, shifts, dates, wSched, dragging, dragOver, setDragOve
   else users.forEach(u=>rows.push({sep:false,u}));
 
   return (
-    <div style={{overflowX:"auto",overflowY:"auto",flex:1}}>
+    <div style={{overflowX:"auto",overflowY:"auto",flex:1,cursor:dragging?"grabbing":"default"}} className={dragging?"no-select":""}>
       {copied && (
-        <div style={{padding:"4px 14px",background:"#FAFAFA",borderBottom:"1px solid #F0F0F0",fontSize:11,color:"#555",display:"flex",alignItems:"center",gap:8}}>
-          <span style={{fontWeight:500}}>📋 Turno copiado.</span>
-          <span style={{color:"#AAA"}}>Haz clic derecho en otra celda para pegar, o</span>
-          <button className="btn" onClick={()=>setCopied(null)} style={{fontSize:11,color:"#9B2335",background:"none",textDecoration:"underline",padding:0}}>cancelar</button>
+        <div style={{padding:"6px 16px",background:"#FFFBF0",borderBottom:"1px solid #FDE68A",fontSize:12,color:"#92400E",display:"flex",alignItems:"center",gap:8}}>
+          <span style={{fontWeight:500}}>Turno copiado.</span>
+          <span style={{color:"#B45309"}}>Clic en cualquier celda para pegar.</span>
+          <button className="btn" onClick={()=>setCopied(null)} style={{marginLeft:"auto",fontSize:11,color:"#92400E",background:"none",textDecoration:"underline",padding:0}}>cancelar</button>
         </div>
       )}
-      <table style={{borderCollapse:"collapse",width:"100%",minWidth:720}}>
+      <table style={{borderCollapse:"collapse",width:"100%",minWidth:760}}>
         <thead>
           <tr style={{background:"#FAFAFA"}}>
-            <th style={{padding:"8px 14px",textAlign:"left",fontSize:11,fontWeight:600,color:"#111",borderBottom:"1px solid #EBEBEB",position:"sticky",left:0,background:"#FAFAFA",zIndex:5,width:124}}>Persona</th>
+            <th style={{padding:"10px 16px",textAlign:"left",fontSize:11,fontWeight:600,color:"#111",borderBottom:"1px solid #EBEBEB",position:"sticky",left:0,background:"#FAFAFA",zIndex:5,width:136}}>Persona</th>
             {DAYS.map((day,di)=>{
               const d=dates[di], isToday=d&&d.toDateString()===today.toDateString(), isSun=di===6;
-              return <th key={day} style={{padding:"8px 4px",textAlign:"center",fontSize:11,fontWeight:600,color:isSun?"#CCC":"#111",borderBottom:"1px solid #EBEBEB",borderLeft:"1px solid #F0F0F0",minWidth:93}}>
-                <div style={{display:"inline-flex",flexDirection:"column",alignItems:"center",gap:1}}>
-                  <span style={{fontSize:9,color:"#BBB",fontWeight:500,textTransform:"uppercase"}}>{DAY_SHORT[di]}</span>
-                  <span style={{fontSize:13,fontWeight:700,background:isToday?"#111":"transparent",color:isToday?"#fff":"inherit",borderRadius:4,padding:"1px 5px"}}>{d?.getDate()}</span>
+              return <th key={day} style={{padding:"10px 6px",textAlign:"center",fontSize:11,fontWeight:600,color:isSun?"#CCC":"#111",borderBottom:"1px solid #EBEBEB",borderLeft:"1px solid #F0F0F0",minWidth:100}}>
+                <div style={{display:"inline-flex",flexDirection:"column",alignItems:"center",gap:2}}>
+                  <span style={{fontSize:9,color:"#BBB",fontWeight:500,textTransform:"uppercase",letterSpacing:".5px"}}>{DAY_SHORT[di]}</span>
+                  <span style={{fontSize:14,fontWeight:700,background:isToday?"#111":"transparent",color:isToday?"#fff":"inherit",borderRadius:5,padding:"2px 7px",lineHeight:1.3}}>{d?.getDate()}</span>
                 </div>
               </th>;
             })}
-            <th style={{padding:"8px 6px",textAlign:"center",fontSize:11,fontWeight:600,color:"#111",borderBottom:"1px solid #EBEBEB",minWidth:46}}>hrs</th>
+            <th style={{padding:"10px 8px",textAlign:"center",fontSize:11,fontWeight:600,color:"#111",borderBottom:"1px solid #EBEBEB",minWidth:50}}>hrs</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((row,ri)=>{
-            if(row.sep) return <tr key={`s${ri}`}><td colSpan={9} style={{padding:"4px 14px",fontSize:9,fontWeight:700,color:"#DDD",textTransform:"uppercase",letterSpacing:".8px",background:"#FAFAFA",borderBottom:"1px solid #F5F5F5"}}>{row.label}</td></tr>;
+            if(row.sep) return <tr key={`s${ri}`}><td colSpan={9} style={{padding:"5px 16px",fontSize:9,fontWeight:700,color:"#CCC",textTransform:"uppercase",letterSpacing:"1px",background:"#FAFAFA",borderBottom:"1px solid #F5F5F5"}}>{row.label}</td></tr>;
             const u=row.u, hrs=userHoursW(u.id), over=hrs>RULES.WEEK_H;
             return <tr key={u.id} className="wrow" style={{borderBottom:"1px solid #F5F5F5"}}>
-              <td style={{padding:"5px 14px",position:"sticky",left:0,background:"#fff",zIndex:2,transition:"background .1s"}}>
-                <div style={{display:"flex",alignItems:"center",gap:7,cursor:"pointer"}} onClick={()=>onUserClick(u)}>
-                  <Av name={u.name} color={u.color} size={19}/>
-                  <div><div style={{fontSize:11,fontWeight:500}}>{u.name}</div><div style={{fontSize:9,color:"#CCC"}}>{u.role}</div></div>
+              <td style={{padding:"6px 16px",position:"sticky",left:0,background:"#fff",zIndex:2,transition:"background .1s"}}>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <div onPointerDown={e=>startDrag(e,{t:"user",uid:u.id})} className="no-select"
+                    style={{cursor:"grab",flexShrink:0}} title="Arrastra al horario">
+                    <Av name={u.name} color={u.color} size={22}/>
+                  </div>
+                  <div style={{cursor:"pointer",minWidth:0}} onClick={()=>onUserClick(u)}>
+                    <div style={{fontSize:12,fontWeight:500,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{u.name}</div>
+                    <div style={{fontSize:10,color:"#CCC"}}>{u.role}</div>
+                  </div>
                 </div>
               </td>
               {DAYS.map((day)=>{
-                const ck=`${day}-${u.id}`, isOver=dragOver===ck, val=wSched[ck];
+                const ck=`${day}||${u.id}`, isOver=dragOver===ck, val=wSched[`${day}-${u.id}`];
                 const isPasting=!!copied;
                 return <td key={day} className={`wcell ${isOver?"drag-ov":""}`}
-                  onDragOver={e=>{ e.preventDefault(); setDragOver(ck); }}
-                  onDragLeave={()=>setDragOver(null)}
-                  onDrop={()=>dropW(day,u.id)}
-                  onClick={()=>{
-                    if(isPasting){ assignW(day,u.id,copied.val); setCopied(null); }
-                    else if(!val) setPicker({day,uid:u.id});
-                  }}
+                  data-cellkey={`${day}||${u.id}`}
+                  onClick={()=>{ if(!dragging){ if(isPasting){ assignW(day,u.id,copied.val); setCopied(null); } else if(!val) setPicker({day,uid:u.id}); } }}
                   onContextMenu={e=>{ e.preventDefault(); if(val&&!isSpec(val)) setCopied({val}); }}
-                  style={{padding:"3px 3px",borderRadius:isOver?5:0,borderLeft:"1px solid #F0F0F0",cursor:isPasting?"copy":"pointer",outline:isPasting?"1px dashed #AAA":"none"}}>
-                  <div style={{position:"relative",minHeight:30}}>
+                  style={{padding:"4px 4px",borderRadius:isOver?6:0,borderLeft:"1px solid #F0F0F0",cursor:isPasting?"copy":dragging?"crosshair":"pointer"}}>
+                  <div style={{position:"relative",minHeight:38}} className={val?"cell-filled":""}>
+                    {isOver && <div className="cell-drop-hint"/>}
                     <CellTag val={val} shifts={shifts}/>
-                    {val && <button className="btn rm" onClick={e=>{ e.stopPropagation(); removeW(day,u.id); }}
-                      style={{position:"absolute",top:1,right:1,background:"rgba(255,255,255,.96)",color:"#CCC",fontSize:9,lineHeight:1,padding:"1px 3px",borderRadius:3,border:"1px solid #EEE",opacity:0}}>×</button>}
-                    {!val && <div style={{height:30,display:"flex",alignItems:"center",justifyContent:"center",color:isPasting?"#AAA":"#E8E8E8",fontSize:13}}>{isPasting?"↓":"+"}</div>}
+                    {val && <button className="btn rm" onPointerDown={e=>e.stopPropagation()} onClick={e=>{ e.stopPropagation(); removeW(day,u.id); }}
+                      style={{position:"absolute",top:2,right:2,background:"rgba(255,255,255,.96)",color:"#AAA",fontSize:10,lineHeight:1,padding:"2px 4px",borderRadius:4,border:"1px solid #E8E8E8",opacity:0,zIndex:3}}>×</button>}
+                    {!val && <div style={{height:38,display:"flex",alignItems:"center",justifyContent:"center",color:isPasting?"#B45309":"#E0E0E0",fontSize:isOver?18:14,transition:"all .12s"}}>{isPasting?"↓":isOver?"+":" "}</div>}
                   </div>
                 </td>;
               })}
-              <td style={{textAlign:"center",fontSize:11,fontWeight:600,color:over?"#9B2335":hrs>=42?"#3D7A61":"#666",paddingRight:6}}>{hrs.toFixed(1)}</td>
+              <td style={{textAlign:"center",fontSize:12,fontWeight:600,color:over?"#9B2335":hrs>=42?"#3D7A61":"#777",paddingRight:8,whiteSpace:"nowrap"}}>{hrs.toFixed(1)}</td>
             </tr>;
           })}
         </tbody>
@@ -951,52 +1080,67 @@ function ProfileModal({ user, users, shifts, schedule, onClose, onEdit }) {
   let totalH=0;
   const dayRows=DAYS.map((day,di)=>{
     const val=wSched[`${day}-${user.id}`];
-    let label="—", hours=null;
+    let label="—", timeLabel=null;
     if(val){
       if(isSpec(val)){ label=getSpec(val).label; }
-      else { const s=shifts.find(x=>x.id===val); if(s){ label=`${s.name} (${s.start}–${s.end})`; hours=shiftH(s); totalH+=shiftH(s); }}
+      else { const s=shifts.find(x=>x.id===val); if(s){ timeLabel=`${s.start}–${s.end}`; label=timeLabel; const h=shiftH(s); totalH+=h; }}
     }
-    return {day,date:dates[di],label,hours};
+    return {day, date:dates[di], label, timeLabel};
   });
+
+  // Colación — check if this user is assigned colación any day this week
+  const colacionStorage = JSON.parse(localStorage.getItem("so_colacion")||"{}");
+  const colacionDays = dates.filter(d=>{
+    const key=`col-${d?.toDateString()}`;
+    return colacionStorage[key]===user.id;
+  }).map(d=>DAYS[(d.getDay()+6)%7]);
 
   function printPDF(){
     const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Perfil ${user.name}</title>
     <style>
       @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
       *{box-sizing:border-box;margin:0;padding:0;}
-      body{font-family:'Inter',sans-serif;color:#111;background:#fff;padding:48px 56px;max-width:700px;margin:0 auto;-webkit-print-color-adjust:exact;}
-      h1{font-size:24px;font-weight:700;letter-spacing:-0.5px;margin-bottom:4px;}
-      .meta{font-size:13px;color:#888;margin-bottom:36px;}
-      .sec-title{font-size:9px;font-weight:700;color:#AAA;text-transform:uppercase;letter-spacing:1.2px;margin-bottom:10px;margin-top:28px;}
+      body{font-family:'Inter',sans-serif;color:#111;background:#fff;padding:48px 56px;max-width:680px;margin:0 auto;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+      h1{font-size:22px;font-weight:700;letter-spacing:-0.5px;margin-bottom:3px;}
+      .meta{font-size:12px;color:#888;margin-bottom:32px;}
+      .sec-title{font-size:9px;font-weight:700;color:#AAA;text-transform:uppercase;letter-spacing:1.4px;margin-bottom:8px;margin-top:28px;}
       table{width:100%;border-collapse:collapse;}
-      th{text-align:left;font-size:11px;font-weight:600;color:#333;padding:7px 12px;border-bottom:2px solid #111;background:#fff;}
-      td{font-size:12px;color:#222;padding:8px 12px;border-bottom:1px solid #F0F0F0;}
+      th{text-align:left;font-size:11px;font-weight:600;color:#111;padding:8px 12px;background:#FAFAFA;border-bottom:1px solid #DEDEDE;}
+      td{font-size:12px;color:#222;padding:9px 12px;border-bottom:1px solid #F2F2F2;}
       tr:last-child td{border-bottom:none;}
-      .total-row{font-size:12px;font-weight:600;color:#111;text-align:right;padding:10px 12px 0;}
-      .badge{display:inline-block;padding:2px 7px;border-radius:3px;font-size:10px;font-weight:600;background:#F0F0F0;color:#555;}
-      .footer{margin-top:48px;font-size:10px;color:#CCC;border-top:1px solid #EBEBEB;padding-top:14px;display:flex;justify-content:space-between;}
-      @media print{body{padding:32px 40px;}}
+      td.day{font-weight:500;color:#111;white-space:nowrap;}
+      td.dim{color:#AAA;}
+      .task-item{padding:9px 12px;border-bottom:1px solid #F2F2F2;font-size:12px;color:#222;}
+      .task-item:last-child{border-bottom:none;}
+      .footer{margin-top:44px;font-size:10px;color:#CCC;border-top:1px solid #EBEBEB;padding-top:12px;display:flex;justify-content:space-between;}
+      @media print{body{padding:28px 36px;}}
     </style></head><body>
     <h1>${user.name}</h1>
     <div class="meta">${user.role||"Sin cargo"} &nbsp;·&nbsp; ${user.area} &nbsp;·&nbsp; ${weekLabel(wo)}</div>
 
-    <div class="sec-title">Horario semanal</div>
+    <div class="sec-title">Horario</div>
     <table>
-      <tr><th>Día</th><th>Fecha</th><th>Turno</th></tr>
-      ${dayRows.map(r=>`<tr>
-        <td style="font-weight:500">${r.day}</td>
-        <td style="color:#888">${r.date?.toLocaleDateString("es-CL",{day:"numeric",month:"short"})}</td>
-        <td>${r.label}</td>
-      </tr>`).join("")}
+      <thead><tr><th style="width:38%">Día</th><th>Horario</th></tr></thead>
+      <tbody>
+      ${dayRows.map(r=>{
+        const dateStr=r.date?.toLocaleDateString("es-CL",{day:"numeric",month:"long"});
+        const dayDate=`${r.day} ${r.date?.getDate()}`;
+        const isOff=r.label==="—"||r.label==="Libre";
+        return `<tr>
+          <td class="day">${dayDate}</td>
+          <td class="${isOff?"dim":""}">${r.label}</td>
+        </tr>`;
+      }).join("")}
+      </tbody>
     </table>
 
-    ${user.area==="Cocina"?`
+    ${user.area==="Cocina"&&(rotTask||fixTask||colacionDays.length>0)?`
     <div class="sec-title">Tareas esta semana</div>
-    <table>
-      <tr><th>Tipo</th><th>Tarea</th></tr>
-      ${rotTask?`<tr><td><span class="badge">Rotativa</span></td><td>${rotTask}</td></tr>`:""}
-      ${fixTask?`<tr><td><span class="badge">Fija</span></td><td>${fixTask}</td></tr>`:""}
-    </table>`:""}
+    <div style="border:1px solid #EBEBEB;border-radius:6px;overflow:hidden;">
+      ${rotTask?`<div class="task-item">${rotTask}</div>`:""}
+      ${fixTask?`<div class="task-item">${fixTask}</div>`:""}
+      ${colacionDays.length>0?`<div class="task-item">Colación — ${colacionDays.join(", ")}</div>`:""}
+    </div>`:""}
 
     <div class="footer">
       <span>stShifts</span>
@@ -1006,10 +1150,8 @@ function ProfileModal({ user, users, shifts, schedule, onClose, onEdit }) {
     </body></html>`;
     const blob=new Blob([html],{type:"text/html;charset=utf-8"});
     const url=URL.createObjectURL(blob);
-    const a=document.createElement("a");
-    // Try opening in new tab for print dialog
     const w=window.open(url,"_blank","width=800,height=900");
-    if(!w){ a.href=url; a.target="_blank"; a.click(); }
+    if(!w){ const a=document.createElement("a"); a.href=url; a.target="_blank"; a.click(); }
     setTimeout(()=>URL.revokeObjectURL(url),10000);
   }
 
@@ -1044,47 +1186,39 @@ function ProfileModal({ user, users, shifts, schedule, onClose, onEdit }) {
           <table style={{width:"100%",borderCollapse:"collapse",marginBottom:6}}>
             <thead>
               <tr style={{background:"#FAFAFA"}}>
-                <th style={{textAlign:"left",fontSize:11,fontWeight:600,color:"#333",padding:"6px 10px",borderBottom:"1px solid #EBEBEB"}}>Día</th>
-                <th style={{textAlign:"left",fontSize:11,fontWeight:600,color:"#333",padding:"6px 10px",borderBottom:"1px solid #EBEBEB"}}>Turno</th>
-                <th style={{textAlign:"right",fontSize:11,fontWeight:600,color:"#333",padding:"6px 10px",borderBottom:"1px solid #EBEBEB"}}>Horas</th>
+                <th style={{textAlign:"left",fontSize:11,fontWeight:600,color:"#111",padding:"7px 10px",borderBottom:"1px solid #DEDEDE",width:"42%"}}>Día</th>
+                <th style={{textAlign:"left",fontSize:11,fontWeight:600,color:"#111",padding:"7px 10px",borderBottom:"1px solid #DEDEDE"}}>Horario</th>
               </tr>
             </thead>
             <tbody>
               {dayRows.map((r,i)=>(
                 <tr key={r.day} style={{borderBottom:i<6?"1px solid #F5F5F5":"none"}}>
-                  <td style={{padding:"7px 10px",fontSize:12,fontWeight:500,color:"#333",whiteSpace:"nowrap"}}>{r.day}</td>
-                  <td style={{padding:"7px 10px",fontSize:12,color:r.label==="—"?"#CCC":"#111"}}>{r.label}</td>
-                  <td style={{padding:"7px 10px",fontSize:12,textAlign:"right",color:r.hours?r.hours>RULES.MAX_DAY_H?"#9B2335":"#333":"#CCC",fontWeight:r.hours?600:400}}>{r.hours?r.hours.toFixed(1)+"h":"—"}</td>
+                  <td style={{padding:"8px 10px",fontSize:12,fontWeight:500,color:"#111",whiteSpace:"nowrap"}}>
+                    {r.day} <span style={{fontWeight:400,color:"#888"}}>{r.date?.getDate()}</span>
+                  </td>
+                  <td style={{padding:"8px 10px",fontSize:12,color:r.label==="—"?"#CCC":"#111"}}>{r.label}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-          <div style={{textAlign:"right",fontSize:12,fontWeight:600,color:totalH>RULES.WEEK_H?"#9B2335":totalH>=42?"#3D7A61":"#555",marginBottom:22}}>
-            Total: {totalH.toFixed(1)}h / 44h
+          <div style={{textAlign:"right",fontSize:11,color:totalH>RULES.WEEK_H?"#9B2335":totalH>=42?"#3D7A61":"#888",marginBottom:22}}>
+            {totalH.toFixed(1)}h / 44h
           </div>
 
           {/* Tasks (kitchen only) */}
-          {user.area==="Cocina" && (
+          {user.area==="Cocina" && (rotTask||fixTask||colacionDays.length>0) && (
             <>
               <div style={{fontSize:10,fontWeight:700,color:"#AAA",textTransform:"uppercase",letterSpacing:".7px",marginBottom:10}}>Tareas esta semana</div>
               <div style={{border:"1px solid #EBEBEB",borderRadius:8,overflow:"hidden"}}>
-                {rotTask && <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 14px",borderBottom:fixTask?"1px solid #F5F5F5":"none"}}>
-                  <div>
-                    <div style={{fontSize:11,color:"#AAA",marginBottom:2}}>Rotativa</div>
-                    <div style={{fontSize:13,fontWeight:500}}>{rotTask}</div>
-                  </div>
-                  <span style={{fontSize:10,fontWeight:600,color:"#888",background:"#F5F5F5",padding:"2px 7px",borderRadius:4}}>ROT</span>
-                </div>}
-                {fixTask && <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 14px"}}>
-                  <div>
-                    <div style={{fontSize:11,color:"#AAA",marginBottom:2}}>Fija</div>
-                    <div style={{fontSize:13,fontWeight:500}}>{fixTask}</div>
-                  </div>
-                  <span style={{fontSize:10,fontWeight:600,color:"#888",background:"#F5F5F5",padding:"2px 7px",borderRadius:4}}>FIJA</span>
-                </div>}
-                {!rotTask && !fixTask && <div style={{padding:"12px 14px",fontSize:12,color:"#CCC"}}>Sin tareas asignadas esta semana.</div>}
+                {rotTask && <div style={{padding:"9px 14px",borderBottom:(fixTask||colacionDays.length>0)?"1px solid #F5F5F5":"none",fontSize:13,fontWeight:500,color:"#111"}}>{rotTask}</div>}
+                {fixTask && <div style={{padding:"9px 14px",borderBottom:colacionDays.length>0?"1px solid #F5F5F5":"none",fontSize:13,fontWeight:500,color:"#111"}}>{fixTask}</div>}
+                {colacionDays.length>0 && <div style={{padding:"9px 14px",fontSize:13,fontWeight:500,color:"#111"}}>Colación — <span style={{fontWeight:400,color:"#666"}}>{colacionDays.join(", ")}</span></div>}
+                {!rotTask && !fixTask && colacionDays.length===0 && <div style={{padding:"12px 14px",fontSize:12,color:"#CCC"}}>Sin tareas esta semana.</div>}
               </div>
             </>
+          )}
+          {user.area==="Cocina" && !rotTask && !fixTask && colacionDays.length===0 && (
+            <><div style={{fontSize:10,fontWeight:700,color:"#AAA",textTransform:"uppercase",letterSpacing:".7px",marginBottom:10}}>Tareas esta semana</div><div style={{padding:"12px 14px",fontSize:12,color:"#CCC",border:"1px solid #EBEBEB",borderRadius:8}}>Sin tareas esta semana.</div></>
           )}
         </div>
       </div>
@@ -1224,6 +1358,191 @@ function ReportModal({ users, shifts, schedule, wo, monthRef, onClose }) {
   );
 }
 
+// ─── TEMPLATE MODAL ───────────────────────────────────────────────────────────
+function TemplateModal({ templates, setTemplates, wo, monthRef, currentWeekLabel, onSave, onApplyWeek, onApplyMonth, onClose }) {
+  const [view,      setView]      = useState("list"); // "list" | "save" | "apply"
+  const [saveName,  setSaveName]  = useState(`WK${templates.length+1}`);
+  const [selTpl,    setSelTpl]    = useState(null);
+  const [applyMode, setApplyMode] = useState("week"); // "week" | "month"
+  const [applyWo,   setApplyWo]   = useState(wo);
+  const [applyMonth,setApplyMonth]= useState(monthRef);
+  const [confirm,   setConfirm]   = useState(false);
+
+  const today=new Date();
+
+  function doApply(){
+    if(!selTpl) return;
+    if(applyMode==="week") onApplyWeek(selTpl, applyWo);
+    else onApplyMonth(selTpl, applyMonth.y, applyMonth.m);
+    onClose();
+  }
+
+  const MONTH_NAMES_SHORT=["Ene","Feb","Mar","Apr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
+
+  return (
+    <div className="modal-bg" onClick={onClose}>
+      <div className="modal" onClick={e=>e.stopPropagation()} style={{width:440,maxHeight:"88vh",overflowY:"auto",padding:0}}>
+
+        {/* Header */}
+        <div style={{padding:"20px 24px 16px",borderBottom:"1px solid #F0F0F0",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <div>
+            <div style={{fontSize:15,fontWeight:700}}>Plantillas de horario</div>
+            <div style={{fontSize:12,color:"#AAA",marginTop:2}}>Guarda y aplica semanas completas</div>
+          </div>
+          <button className="btn" onClick={onClose} style={{background:"none",color:"#BBB",fontSize:18,padding:"0 4px"}}>×</button>
+        </div>
+
+        {/* Tabs */}
+        <div style={{display:"flex",borderBottom:"1px solid #F0F0F0",padding:"0 24px"}}>
+          {[["list","Mis plantillas"],["save","Guardar actual"],["apply","Aplicar"]].map(([v,l])=>(
+            <button key={v} className="btn" onClick={()=>setView(v)}
+              style={{padding:"11px 0",marginRight:20,fontSize:13,fontWeight:500,color:view===v?"#111":"#AAA",borderBottom:view===v?"2px solid #111":"2px solid transparent",borderRadius:0,background:"none"}}>
+              {l}
+            </button>
+          ))}
+        </div>
+
+        <div style={{padding:"20px 24px"}}>
+
+          {/* LIST */}
+          {view==="list" && (
+            <div>
+              {templates.length===0 && (
+                <div style={{textAlign:"center",padding:"32px 0",color:"#AAA"}}>
+                  <div style={{fontSize:28,marginBottom:8}}>📋</div>
+                  <div style={{fontSize:13}}>Sin plantillas aún.</div>
+                  <button className="btn" onClick={()=>setView("save")} style={{marginTop:12,background:"#111",color:"#fff",padding:"7px 16px",borderRadius:6,fontSize:12}}>
+                    Guardar semana actual
+                  </button>
+                </div>
+              )}
+              {templates.map(tpl=>(
+                <div key={tpl.id} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 14px",borderRadius:9,border:"1px solid #F0F0F0",marginBottom:6,transition:"background .12s"}}
+                  onMouseEnter={e=>e.currentTarget.style.background="#FAFAFA"} onMouseLeave={e=>e.currentTarget.style.background="#fff"}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,fontWeight:600,color:"#111"}}>{tpl.name}</div>
+                    <div style={{fontSize:11,color:"#AAA",marginTop:2}}>Guardada el {tpl.savedAt} · basada en {tpl.weekLabel}</div>
+                    <div style={{fontSize:11,color:"#888",marginTop:1}}>{Object.keys(tpl.data).length} asignaciones</div>
+                  </div>
+                  <div style={{display:"flex",gap:6,flexShrink:0}}>
+                    <button className="btn" onClick={()=>{ setSelTpl(tpl); setView("apply"); }}
+                      style={{background:"#111",color:"#fff",padding:"5px 11px",borderRadius:6,fontSize:12,fontWeight:500}}>
+                      Aplicar
+                    </button>
+                    <button className="btn" onClick={()=>setTemplates(p=>p.filter(x=>x.id!==tpl.id))}
+                      style={{background:"#FBF0F0",color:"#9B2335",padding:"5px 10px",borderRadius:6,fontSize:12}}>
+                      ×
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* SAVE */}
+          {view==="save" && (
+            <div>
+              <div style={{fontSize:12,color:"#666",marginBottom:16,lineHeight:1.6}}>
+                Guarda el horario de la semana <strong style={{color:"#111"}}>{currentWeekLabel}</strong> como plantilla reutilizable. Incluye todos los turnos asignados de Cocina y Caja.
+              </div>
+              <span className="lbl">Nombre de la plantilla</span>
+              <input value={saveName} onChange={e=>setSaveName(e.target.value)}
+                placeholder="Ej: WK1, Turno habitual, Semana punta..." autoFocus
+                style={{marginTop:6}}
+                onKeyDown={e=>{ if(e.key==="Enter"&&saveName.trim()){ onSave(saveName.trim()); setView("list"); setSaveName(`WK${templates.length+2}`); }}}/>
+              <div style={{fontSize:11,color:"#AAA",marginTop:8}}>Presiona Enter o clic en Guardar.</div>
+              <div style={{display:"flex",gap:8,marginTop:20}}>
+                <button className="btn" onClick={()=>setView("list")} style={{flex:1,background:"#F3F4F6",color:"#555",padding:"9px",borderRadius:7,fontSize:13}}>Cancelar</button>
+                <button className="btn" onClick={()=>{ if(saveName.trim()){ onSave(saveName.trim()); setView("list"); setSaveName(`WK${templates.length+2}`); }}}
+                  style={{flex:1,background:"#111",color:"#fff",padding:"9px",borderRadius:7,fontSize:13,fontWeight:500}}>
+                  Guardar plantilla
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* APPLY */}
+          {view==="apply" && (
+            <div>
+              {/* Seleccionar plantilla */}
+              <span className="lbl">Plantilla</span>
+              <div style={{marginTop:6,marginBottom:16}}>
+                {templates.length===0 && <div style={{fontSize:12,color:"#AAA"}}>No hay plantillas guardadas.</div>}
+                {templates.map(tpl=>(
+                  <div key={tpl.id} onClick={()=>setSelTpl(tpl)}
+                    style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",borderRadius:8,marginBottom:4,border:`1.5px solid ${selTpl?.id===tpl.id?"#111":"#EBEBEB"}`,cursor:"pointer",transition:"all .13s",background:selTpl?.id===tpl.id?"#FAFAFA":"#fff"}}>
+                    <div style={{width:14,height:14,borderRadius:"50%",border:`2px solid ${selTpl?.id===tpl.id?"#111":"#DDD"}`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                      {selTpl?.id===tpl.id && <div style={{width:6,height:6,borderRadius:"50%",background:"#111"}}/>}
+                    </div>
+                    <div>
+                      <div style={{fontSize:13,fontWeight:500,color:"#111"}}>{tpl.name}</div>
+                      <div style={{fontSize:11,color:"#AAA"}}>{Object.keys(tpl.data).length} asignaciones · {tpl.savedAt}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Modo */}
+              <span className="lbl">Aplicar a</span>
+              <div style={{display:"flex",gap:6,marginTop:6,marginBottom:16}}>
+                {[["week","Semana"],["month","Mes completo"]].map(([v,l])=>(
+                  <button key={v} className="btn" onClick={()=>setApplyMode(v)}
+                    style={{flex:1,padding:"8px",borderRadius:7,fontSize:13,fontWeight:500,background:applyMode===v?"#111":"#F5F5F5",color:applyMode===v?"#fff":"#444",border:"none",transition:"all .15s"}}>
+                    {l}
+                  </button>
+                ))}
+              </div>
+
+              {/* Selector semana/mes */}
+              {applyMode==="week" && (
+                <div>
+                  <span className="lbl">Semana</span>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginTop:6}}>
+                    <button className="nav-btn" onClick={()=>setApplyWo(w=>w-1)}>‹</button>
+                    <span style={{flex:1,textAlign:"center",fontSize:13,fontWeight:500,color:"#333"}}>{weekLabel(applyWo)}</span>
+                    <button className="nav-btn" onClick={()=>setApplyWo(w=>w+1)}>›</button>
+                    <button className="nav-btn" onClick={()=>setApplyWo(wo)} style={{fontSize:11,color:"#999"}}>Actual</button>
+                  </div>
+                </div>
+              )}
+
+              {applyMode==="month" && (
+                <div>
+                  <span className="lbl">Mes</span>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginTop:6}}>
+                    <button className="nav-btn" onClick={()=>setApplyMonth(m=>{ const d=new Date(m.y,m.m-1,1); return{y:d.getFullYear(),m:d.getMonth()}; })}>‹</button>
+                    <span style={{flex:1,textAlign:"center",fontSize:13,fontWeight:500,color:"#333"}}>{["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"][applyMonth.m]} {applyMonth.y}</span>
+                    <button className="nav-btn" onClick={()=>setApplyMonth(m=>{ const d=new Date(m.y,m.m+1,1); return{y:d.getFullYear(),m:d.getMonth()}; })}>›</button>
+                    <button className="nav-btn" onClick={()=>setApplyMonth({y:today.getFullYear(),m:today.getMonth()})} style={{fontSize:11,color:"#999"}}>Actual</button>
+                  </div>
+                  <div style={{fontSize:11,color:"#AAA",marginTop:8}}>Se aplicará el mismo horario a todas las semanas del mes.</div>
+                </div>
+              )}
+
+              {/* Confirm warning */}
+              {selTpl && (
+                <div style={{marginTop:16,padding:"10px 12px",borderRadius:7,background:"#FFFBF0",border:"1px solid #FDE68A"}}>
+                  <div style={{fontSize:12,color:"#92400E"}}>
+                    ⚠ Esto <strong>sobreescribirá</strong> los turnos ya asignados en {applyMode==="week"?`la semana del ${weekLabel(applyWo)}`:`${["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"][applyMonth.m]} ${applyMonth.y}`}.
+                  </div>
+                </div>
+              )}
+
+              <div style={{display:"flex",gap:8,marginTop:16}}>
+                <button className="btn" onClick={()=>setView("list")} style={{flex:1,background:"#F3F4F6",color:"#555",padding:"9px",borderRadius:7,fontSize:13}}>Cancelar</button>
+                <button className="btn" onClick={doApply} disabled={!selTpl}
+                  style={{flex:2,background:selTpl?"#111":"#E0E0E0",color:selTpl?"#fff":"#AAA",padding:"9px",borderRadius:7,fontSize:13,fontWeight:500,cursor:selTpl?"pointer":"not-allowed",transition:"all .15s"}}>
+                  Aplicar plantilla
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── SMALL SHARED ─────────────────────────────────────────────────────────────
 function Av({ name, color, size=24 }) {
   return <div style={{width:size,height:size,borderRadius:"50%",background:color,display:"flex",alignItems:"center",justifyContent:"center",fontSize:size*0.4,fontWeight:700,color:"#fff",flexShrink:0}}>{name.charAt(0).toUpperCase()}</div>;
@@ -1233,16 +1552,16 @@ function CellTag({ val, shifts }) {
   if(!val) return null;
   if(isSpec(val)){
     const st=getSpec(val);
-    return <div style={{background:st.bg,border:`1px solid ${st.border}`,borderRadius:4,padding:"2px 5px",display:"flex",alignItems:"center",gap:3}}>
-      <span style={{fontSize:9,fontWeight:700,color:st.color}}>{st.sym}</span>
-      <span style={{fontSize:9,fontWeight:500,color:st.color}}>{st.label}</span>
+    return <div style={{background:st.bg,border:`1px solid ${st.border}`,borderRadius:6,padding:"4px 7px",display:"flex",alignItems:"center",gap:4}}>
+      <span style={{fontSize:10,fontWeight:700,color:st.color,lineHeight:1}}>{st.sym}</span>
+      <span style={{fontSize:10,fontWeight:500,color:st.color}}>{st.label}</span>
     </div>;
   }
   const s=shifts.find(x=>x.id===val);
   if(!s) return null;
-  return <div style={{background:`${s.color}0e`,border:`1px solid ${s.color}22`,borderRadius:4,padding:"2px 5px"}}>
-    <div style={{fontSize:9,fontWeight:600,color:s.color}}>{s.name}</div>
-    <div style={{fontSize:8,color:"#BBB"}}>{s.start}–{s.end}</div>
+  return <div style={{background:`${s.color}12`,border:`1px solid ${s.color}28`,borderRadius:6,padding:"4px 7px"}}>
+    <div style={{fontSize:10,fontWeight:600,color:s.color,lineHeight:1.3}}>{s.name}</div>
+    <div style={{fontSize:9,color:`${s.color}99`,marginTop:1}}>{s.start}–{s.end}</div>
   </div>;
 }
 
