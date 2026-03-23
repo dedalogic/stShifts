@@ -33,9 +33,9 @@ const DEFAULT_SHIFTS = [
 ];
 
 const SPECIAL = {
-  LIBRE:   { id:"__libre__",   label:"Libre",        sym:"—",  bg:"#F7F7F7", border:"#E0E0E0", color:"#777",   exportAs:null },
-  FALTA:   { id:"__falta__",   label:"Falta",        sym:"✕",  bg:"#FDF2F2", border:"#F0C0C0", color:"#9B2335", exportAs:"Falta" },
-  VENDIDO: { id:"__vendido__", label:"Turno vendido",sym:"↔",  bg:"#FDFAF0", border:"#E8D88A", color:"#7A5C00", exportAs:"Turno vendido" },
+  LIBRE:   { id:"__libre__",   label:"Libre",        sym:"",   bg:"#F7F7F7", border:"#E0E0E0", color:"#888",   exportAs:null },
+  FALTA:   { id:"__falta__",   label:"Falta",        sym:"",   bg:"#FDF2F2", border:"#F0C0C0", color:"#9B2335", exportAs:"Falta" },
+  VENDIDO: { id:"__vendido__", label:"Turno vendido",sym:"",   bg:"#FDFAF0", border:"#E8D88A", color:"#7A5C00", exportAs:"Turno vendido" },
   DOBLE:   { id:"__doble__",   label:"Doble turno",  sym:"×2", bg:"#F3F0FA", border:"#C9BEE8", color:"#4A3580", exportAs:null, hidden:true },
 };
 
@@ -198,6 +198,7 @@ export default function App() {
   const [reportModal, setReportModal] = useState(false);
   const [templateModal, setTemplateModal] = useState(false);
   const [templates, setTemplates] = useState(()=>JSON.parse(localStorage.getItem("so_templates")||"[]"));
+  const [dark,     setDark]     = useState(()=>localStorage.getItem("so_dark")==="1");
   const [monthRef, setMonthRef] = useState(()=>{ const n=new Date(); return{y:n.getFullYear(),m:n.getMonth()}; });
 
   // ── pointer-drag ghost tracking ──
@@ -243,6 +244,7 @@ export default function App() {
   useEffect(()=>{ localStorage.setItem("so_shifts",  JSON.stringify(shifts));   },[shifts]);
   useEffect(()=>{ localStorage.setItem("so_schedule",JSON.stringify(schedule)); },[schedule]);
   useEffect(()=>{ localStorage.setItem("so_templates",JSON.stringify(templates)); },[templates]);
+  useEffect(()=>{ localStorage.setItem("so_dark", dark?"1":"0"); },[dark]);
   useEffect(()=>{ setAlerts(checkRules(schedule,visible,shifts,wk)); },[schedule,extra,areaF,shifts,wk]);
 
   const setCell=(wk2,dn,uid,val)=>setSchedule(p=>({...p,[wk2]:{...(p[wk2]||{}),[`${dn}-${uid}`]:val}}));
@@ -378,126 +380,163 @@ export default function App() {
   const errN=alerts.filter(a=>a.type==="error").length;
   const warnN=alerts.filter(a=>a.type==="warn").length;
 
+  const D = dark ? {
+    bg:"#141414", bg2:"#1C1C1C", bg3:"#242424", bg4:"#2A2A2A",
+    border:"#2E2E2E", border2:"#383838",
+    text:"#EDEDEB", text2:"#999", text3:"#555",
+    nav:"#111", navBorder:"#252525",
+    cell:"#1A1A1A", cellHover:"#202020",
+    tableHead:"#181818", tableRow:"#141414", tableAlt:"#181818",
+    input:"#1C1C1C", inputBorder:"#333",
+    btnBg:"#222", btnBorder:"#333",
+    tabActive:"#EDEDEB", tabActiveText:"#111",
+    scrollThumb:"#333",
+  } : {
+    bg:"#fff", bg2:"#FAFAFA", bg3:"#F5F5F5", bg4:"#F0F0F0",
+    border:"#EBEBEB", border2:"#E0E0E0",
+    text:"#111", text2:"#888", text3:"#CCC",
+    nav:"#fff", navBorder:"#EBEBEB",
+    cell:"#fff", cellHover:"#F8F8F8",
+    tableHead:"#FAFAFA", tableRow:"#fff", tableAlt:"#FAFAFA",
+    input:"#fff", inputBorder:"#E5E7EB",
+    btnBg:"#F5F5F5", btnBorder:"#E8E8E8",
+    tabActive:"#111", tabActiveText:"#fff",
+    scrollThumb:"#E0E0E0",
+  };
+
   return (
-    <div style={{fontFamily:"'Inter',sans-serif",background:"#fff",minHeight:"100vh",color:"#111"}}>
+    <div style={{fontFamily:"'Inter',sans-serif",background:D.bg,minHeight:"100vh",color:D.text,colorScheme:dark?"dark":"light"}}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
         *{box-sizing:border-box;margin:0;padding:0;}
         ::-webkit-scrollbar{width:4px;height:4px;}
-        ::-webkit-scrollbar-thumb{background:#E0E0E0;border-radius:4px;}
+        ::-webkit-scrollbar-thumb{background:${D.scrollThumb};border-radius:4px;}
         ::-webkit-scrollbar-track{background:transparent;}
         .btn{cursor:pointer;border:none;font-family:'Inter',sans-serif;transition:all .18s cubic-bezier(.4,0,.2,1);}
         .btn:hover{opacity:.72;}
         .btn:active{transform:scale(.97);}
-        .tab{cursor:pointer;padding:6px 13px;border-radius:6px;font-size:13px;font-weight:500;color:#666;border:none;background:none;font-family:'Inter',sans-serif;transition:all .15s;}
-        .tab.active{background:#111;color:#fff;}
-        .tab:hover:not(.active){background:#F3F4F6;color:#111;}
-        .vtab{cursor:pointer;padding:4px 10px;border-radius:5px;font-size:12px;font-weight:500;color:#888;border:1px solid transparent;background:none;font-family:'Inter',sans-serif;transition:all .15s;}
-        .vtab.active{border-color:#D9D9D9;background:#fff;color:#111;box-shadow:0 1px 3px rgba(0,0,0,.06);}
-        .atab{cursor:pointer;padding:4px 10px;border-radius:5px;font-size:12px;font-weight:500;color:#888;border:none;background:none;font-family:'Inter',sans-serif;transition:all .15s;}
-        .atab.active{background:#111;color:#fff;}
-        .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.18);display:flex;align-items:center;justify-content:center;z-index:100;animation:fadeIn .15s ease;}
+        .tab{cursor:pointer;padding:6px 13px;border-radius:6px;font-size:13px;font-weight:500;color:${D.text2};border:none;background:none;font-family:'Inter',sans-serif;transition:all .15s;}
+        .tab.active{background:${D.tabActive};color:${D.tabActiveText};}
+        .tab:hover:not(.active){background:${D.bg3};color:${D.text};}
+        .vtab{cursor:pointer;padding:4px 10px;border-radius:5px;font-size:12px;font-weight:500;color:${D.text2};border:1px solid transparent;background:none;font-family:'Inter',sans-serif;transition:all .15s;}
+        .vtab.active{border-color:${D.border2};background:${D.bg2};color:${D.text};box-shadow:0 1px 3px rgba(0,0,0,.15);}
+        .atab{cursor:pointer;padding:4px 10px;border-radius:5px;font-size:12px;font-weight:500;color:${D.text2};border:none;background:none;font-family:'Inter',sans-serif;transition:all .15s;}
+        .atab.active{background:${D.tabActive};color:${D.tabActiveText};}
+        .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,${dark?.45:.18});display:flex;align-items:center;justify-content:center;z-index:100;animation:fadeIn .15s ease;}
         @keyframes fadeIn{from{opacity:0}to{opacity:1}}
         @keyframes slideUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
-        .modal{background:#fff;border-radius:14px;padding:26px;width:360px;box-shadow:0 12px 40px rgba(0,0,0,.12);animation:slideUp .18s cubic-bezier(.4,0,.2,1);}
-        input,select{width:100%;padding:8px 11px;border:1px solid #E5E7EB;border-radius:7px;font-size:13px;font-family:'Inter',sans-serif;outline:none;color:#111;transition:border-color .15s;}
-        input:focus,select:focus{border-color:#555;box-shadow:0 0 0 3px rgba(0,0,0,.05);}
-        .lbl{font-size:10px;font-weight:700;color:#AAA;display:block;margin-bottom:4px;margin-top:14px;text-transform:uppercase;letter-spacing:.7px;}
-        .nav-btn{background:none;border:1px solid #E8E8E8;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:13px;color:#444;font-family:'Inter',sans-serif;transition:all .15s;}
-        .nav-btn:hover{background:#F5F5F5;border-color:#D0D0D0;}
+        .modal{background:${D.bg2};border-radius:14px;padding:26px;width:360px;box-shadow:0 12px 40px rgba(0,0,0,${dark?.5:.12});animation:slideUp .18s cubic-bezier(.4,0,.2,1);border:1px solid ${D.border};}
+        input,select{width:100%;padding:8px 11px;border:1px solid ${D.inputBorder};border-radius:7px;font-size:13px;font-family:'Inter',sans-serif;outline:none;color:${D.text};background:${D.input};transition:border-color .15s;}
+        input:focus,select:focus{border-color:${dark?"#555":"#555"};box-shadow:0 0 0 3px rgba(${dark?"255,255,255":"0,0,0"},.06);}
+        option{background:${D.bg2};color:${D.text};}
+        .lbl{font-size:10px;font-weight:700;color:${D.text2};display:block;margin-bottom:4px;margin-top:14px;text-transform:uppercase;letter-spacing:.7px;}
+        .nav-btn{background:none;border:1px solid ${D.btnBorder};border-radius:6px;padding:5px 10px;cursor:pointer;font-size:13px;color:${D.text};font-family:'Inter',sans-serif;transition:all .15s;}
+        .nav-btn:hover{background:${D.bg3};border-color:${D.border2};}
         .nav-btn:active{transform:scale(.97);}
-        .wcell{transition:background .12s,box-shadow .12s;cursor:pointer;position:relative;}
-        .wcell:hover{background:#F8F8F8!important;}
-        .drag-ov{background:#EEF4FF!important;box-shadow:inset 0 0 0 2px #4B6CB7!important;}
-        .wrow{transition:background .1s;}
-        .wrow:hover td{background:#FAFAFA;}
-        .wrow:hover td:first-child{background:#FAFAFA!important;}
+        .wcell{transition:background .12s;cursor:pointer;position:relative;}
+        .wcell:hover{background:${D.cellHover}!important;}
+        .drag-ov{background:${dark?"#1a2540":"#EEF4FF"}!important;box-shadow:inset 0 0 0 2px #4B6CB7!important;}
+        .wrow td{transition:background .1s;}
+        .wrow:hover td{background:${D.cellHover};}
+        .wrow:hover td:first-child{background:${D.cellHover}!important;}
         .rm{opacity:0!important;transition:opacity .15s!important;}
-        .wrow:hover .rm,.cell-filled:hover .rm{opacity:1!important;}
-        .sec-hdr{display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:5px 0 4px;user-select:none;border-bottom:1px solid #F0F0F0;margin-bottom:8px;}
-        .sec-ttl{font-size:11px;font-weight:600;color:#222;letter-spacing:.1px;}
-        .sec-hdr:hover .sec-ttl{color:#000;}
-        .tog{width:14px;height:14px;border-radius:50%;background:#F0F0F0;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:background .15s;}
-        .tog.open{background:#111;}
-        .tog span{display:block;width:6px;height:1.5px;background:#888;border-radius:1px;transition:background .15s;}
-        .tog.open span{background:#fff;}
-        .cal-cell{transition:background .12s;border-right:1px solid #F0F0F0;}
-        .cal-cell:hover{background:#FAFAFA!important;}
-        .task-row:hover{background:#FAFAFA;}
-        .urow:hover{background:#FAFAFA;}
-        .sb-row{display:flex;align-items:flex-start;gap:8px;padding:6px 4px;border-radius:6px;cursor:grab;transition:background .12s,transform .12s,box-shadow .12s;margin-bottom:2px;user-select:none;}
-        .sb-row:hover{background:#F5F5F5;}
+        .wrow:hover .rm{opacity:1!important;}
+        .sec-hdr{display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:5px 0 4px;user-select:none;border-bottom:1px solid ${D.border};margin-bottom:8px;}
+        .sec-ttl{font-size:11px;font-weight:600;color:${D.text};letter-spacing:.1px;}
+        .sec-hdr:hover .sec-ttl{color:${dark?"#fff":"#000"};}
+        .tog{width:14px;height:14px;border-radius:50%;background:${dark?"#333":"#F0F0F0"};display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:background .15s;}
+        .tog.open{background:${dark?"#EEE":"#111"};}
+        .tog span{display:block;width:6px;height:1.5px;background:${dark?"#888":"#888"};border-radius:1px;transition:background .15s;}
+        .tog.open span{background:${dark?"#111":"#fff"};}
+        .cal-cell{transition:background .12s;border-right:1px solid ${D.border};}
+        .cal-cell:hover{background:${D.cellHover}!important;}
+        .task-row:hover{background:${D.bg2};}
+        .urow:hover{background:${D.bg2};}
+        .sb-row{display:flex;align-items:flex-start;gap:8px;padding:6px 4px;border-radius:6px;cursor:grab;transition:background .12s,transform .12s;margin-bottom:2px;user-select:none;}
+        .sb-row:hover{background:${D.bg3};}
         .sb-row:active{cursor:grabbing;transform:scale(.98);opacity:.7;}
-        .sb-row.dragging-active{opacity:.4;transform:scale(.96);}
-        .drag-ghost{position:fixed;pointer-events:none;z-index:9999;opacity:.92;transform:rotate(1.5deg) scale(1.04);transition:none;filter:drop-shadow(0 8px 24px rgba(0,0,0,.18));animation:ghostPop .12s cubic-bezier(.4,0,.2,1);}
+        .drag-ghost{position:fixed;pointer-events:none;z-index:9999;opacity:.92;transform:rotate(1.5deg) scale(1.04);transition:none;filter:drop-shadow(0 8px 24px rgba(0,0,0,.35));animation:ghostPop .12s cubic-bezier(.4,0,.2,1);}
         @keyframes ghostPop{from{opacity:0;transform:rotate(1.5deg) scale(.9)}to{opacity:.92;transform:rotate(1.5deg) scale(1.04)}}
         .cell-filled{animation:cellIn .15s cubic-bezier(.4,0,.2,1);}
         @keyframes cellIn{from{opacity:0;transform:scale(.93)}to{opacity:1;transform:scale(1)}}
         .no-select{user-select:none!important;-webkit-user-select:none!important;-moz-user-select:none!important;}
-        body.is-dragging{user-select:none!important;-webkit-user-select:none!important;-moz-user-select:none!important;cursor:grabbing!important;}
-        body.is-dragging *{user-select:none!important;-webkit-user-select:none!important;-moz-user-select:none!important;}
-        .cell-drop-hint{position:absolute;inset:3px;border-radius:6px;border:2px dashed #4B6CB7;background:#EEF4FF;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .12s;pointer-events:none;}
+        body.is-dragging{user-select:none!important;-webkit-user-select:none!important;cursor:grabbing!important;}
+        body.is-dragging *{user-select:none!important;-webkit-user-select:none!important;}
+        .cell-drop-hint{position:absolute;inset:3px;border-radius:6px;border:2px dashed #4B6CB7;background:${dark?"#1a2540":"#EEF4FF"};opacity:0;transition:opacity .12s;pointer-events:none;}
         .drag-ov .cell-drop-hint{opacity:1;}
       `}</style>
 
       {/* ── NAV ── */}
-      <div style={{borderBottom:"1px solid #EBEBEB",padding:"0 20px",display:"flex",alignItems:"center",gap:14,height:50}}>
-        <span style={{fontWeight:700,fontSize:14,letterSpacing:"-0.4px"}}>stShifts</span>
+      <div style={{borderBottom:`1px solid ${D.navBorder}`,padding:"0 20px",display:"flex",alignItems:"center",gap:14,height:50,background:D.nav}}>
+        <span style={{fontWeight:700,fontSize:14,letterSpacing:"-0.4px",color:D.text}}>stShifts</span>
         <div style={{display:"flex",gap:2}}>
           {[["schedule","Horario"],["tasks","Tareas"],["users","Personas"],["shifts","Turnos"]].map(([t,l])=>(
             <button key={t} className={`tab ${tab===t?"active":""}`} onClick={()=>setTab(t)}>{l}</button>
           ))}
         </div>
         <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:5}}>
+          {/* Dark mode toggle */}
+          <button className="btn" onClick={()=>setDark(d=>!d)} title={dark?"Modo claro":"Modo oscuro"}
+            style={{background:"none",border:`1px solid ${D.btnBorder}`,borderRadius:6,padding:"6px 7px",display:"flex",alignItems:"center",justifyContent:"center"}}>
+            {dark
+              ? <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+                  <circle cx="6.5" cy="6.5" r="3" stroke={D.text2} strokeWidth="1.3"/>
+                  <path d="M6.5 1v1M6.5 11v1M1 6.5h1M11 6.5h1M2.8 2.8l.7.7M9.5 9.5l.7.7M2.8 10.2l.7-.7M9.5 3.5l.7-.7" stroke={D.text2} strokeWidth="1.3" strokeLinecap="round"/>
+                </svg>
+              : <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+                  <circle cx="6.5" cy="6.5" r="5" stroke="#888" strokeWidth="1.3"/>
+                  <path d="M6.5 1.5 A5 5 0 0 0 6.5 11.5 Z" fill="#888"/>
+                </svg>
+            }
+          </button>
           {/* Templates */}
           <button className="btn" onClick={()=>setTemplateModal(true)} title="Plantillas de horario"
-            style={{background:"none",border:"1px solid #E8E8E8",borderRadius:6,padding:"6px 7px",display:"flex",alignItems:"center",justifyContent:"center"}}>
+            style={{background:"none",border:`1px solid ${D.btnBorder}`,borderRadius:6,padding:"6px 7px",display:"flex",alignItems:"center",justifyContent:"center"}}>
             <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
-              <rect x="1" y="1" width="4.5" height="4.5" rx="1" stroke="#888" strokeWidth="1.3"/>
-              <rect x="7.5" y="1" width="4.5" height="4.5" rx="1" stroke="#888" strokeWidth="1.3"/>
-              <rect x="1" y="7.5" width="4.5" height="4.5" rx="1" stroke="#888" strokeWidth="1.3"/>
-              <rect x="7.5" y="7.5" width="4.5" height="4.5" rx="1" stroke="#888" strokeWidth="1.3"/>
+              <rect x="1" y="1" width="4.5" height="4.5" rx="1" stroke={D.text2} strokeWidth="1.3"/>
+              <rect x="7.5" y="1" width="4.5" height="4.5" rx="1" stroke={D.text2} strokeWidth="1.3"/>
+              <rect x="1" y="7.5" width="4.5" height="4.5" rx="1" stroke={D.text2} strokeWidth="1.3"/>
+              <rect x="7.5" y="7.5" width="4.5" height="4.5" rx="1" stroke={D.text2} strokeWidth="1.3"/>
             </svg>
           </button>
           {/* Backup save */}
           <button className="btn" onClick={saveBackup} title="Guardar copia de seguridad"
-            style={{background:"none",border:"1px solid #E8E8E8",borderRadius:6,padding:"6px 7px",display:"flex",alignItems:"center",justifyContent:"center"}}>
+            style={{background:"none",border:`1px solid ${D.btnBorder}`,borderRadius:6,padding:"6px 7px",display:"flex",alignItems:"center",justifyContent:"center"}}>
             <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
-              <path d="M2 10.5h9M6.5 2v6M4 6l2.5 2.5L9 6" stroke="#888" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M2 10.5h9M6.5 2v6M4 6l2.5 2.5L9 6" stroke={D.text2} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
           </button>
-          {/* Backup load — solo flecha arriba */}
+          {/* Backup load */}
           <button className="btn" onClick={loadBackup} title="Restaurar copia de seguridad"
-            style={{background:"none",border:"1px solid #E8E8E8",borderRadius:6,padding:"6px 7px",display:"flex",alignItems:"center",justifyContent:"center"}}>
+            style={{background:"none",border:`1px solid ${D.btnBorder}`,borderRadius:6,padding:"6px 7px",display:"flex",alignItems:"center",justifyContent:"center"}}>
             <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
-              <path d="M2 10.5h9M6.5 8V2M4 4.5L6.5 2 9 4.5" stroke="#888" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M2 10.5h9M6.5 8V2M4 4.5L6.5 2 9 4.5" stroke={D.text2} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
           </button>
-          {/* Excel export — icono documento minimal */}
+          {/* Excel export */}
           <button className="btn" onClick={exportXLSX} title="Exportar a Excel"
-            style={{background:"none",border:"1px solid #E8E8E8",borderRadius:6,padding:"6px 7px",display:"flex",alignItems:"center",justifyContent:"center"}}>
+            style={{background:"none",border:`1px solid ${D.btnBorder}`,borderRadius:6,padding:"6px 7px",display:"flex",alignItems:"center",justifyContent:"center"}}>
             <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
-              <rect x=".75" y=".75" width="8.5" height="11.5" rx="1.5" stroke="#888" strokeWidth="1.2"/>
-              <path d="M3 4h5M3 6.5h5M3 9h3" stroke="#888" strokeWidth="1.2" strokeLinecap="round"/>
-              <path d="M7.5.75V3.5H10" stroke="#888" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+              <rect x=".75" y=".75" width="8.5" height="11.5" rx="1.5" stroke={D.text2} strokeWidth="1.2"/>
+              <path d="M3 4h5M3 6.5h5M3 9h3" stroke={D.text2} strokeWidth="1.2" strokeLinecap="round"/>
+              <path d="M7.5.75V3.5H10" stroke={D.text2} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
           </button>
         </div>
       </div>
 
-      {/* ── HORARIO ── */}
       {tab==="schedule" && (
-        <div style={{display:"flex",height:"calc(100vh - 50px)",position:"relative"}}>
+        <div style={{display:"flex",height:"calc(100vh - 50px)"}}>
 
           {/* Sidebar toggle button */}
           <button className="btn" onClick={()=>setSidebarOpen(o=>!o)}
             title={sidebarOpen?"Ocultar panel":"Mostrar panel"}
-            style={{position:"absolute",left:sidebarOpen?168:8,top:16,zIndex:20,width:20,height:20,borderRadius:"50%",background:"#fff",border:"1px solid #E0E0E0",display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,color:"#666",boxShadow:"0 1px 4px rgba(0,0,0,.1)",transition:"left .2s",padding:0,flexShrink:0}}>
+            style={{position:"absolute",left:sidebarOpen?168:8,top:66,zIndex:20,width:20,height:20,borderRadius:"50%",background:D.bg2,border:`1px solid ${D.border2}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,color:D.text2,boxShadow:`0 1px 4px rgba(0,0,0,${dark?.3:.1})`,transition:"left .2s",padding:0,flexShrink:0}}>
             {sidebarOpen?"‹":"›"}
           </button>
 
           {/* Sidebar */}
-          <div style={{width:sidebarOpen?160:0,borderRight:sidebarOpen?"1px solid #EBEBEB":"none",padding:sidebarOpen?"16px 13px":"0",overflowY:"auto",overflowX:"hidden",flexShrink:0,display:"flex",flexDirection:"column",gap:16,transition:"width .2s, padding .2s"}}>
+          <div style={{width:sidebarOpen?160:0,borderRight:`1px solid ${D.border}`,padding:sidebarOpen?"16px 13px":"0",overflowY:"auto",overflowX:"hidden",flexShrink:0,display:"flex",flexDirection:"column",gap:16,transition:"width .2s, padding .2s",background:D.bg}}>
 
             {/* Turnos */}
             <div>
@@ -555,8 +594,8 @@ export default function App() {
           </div>
 
           {/* Main */}
-          <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-            <div style={{padding:"8px 16px",borderBottom:"1px solid #EBEBEB",display:"flex",alignItems:"center",gap:9,flexShrink:0,paddingLeft:44}}>
+          <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:D.bg}}>
+            <div style={{padding:"8px 16px",borderBottom:`1px solid ${D.border}`,display:"flex",alignItems:"center",gap:9,flexShrink:0,paddingLeft:44,background:D.bg}}>
               <div style={{background:"#F3F4F6",borderRadius:6,padding:3,display:"flex",gap:1}}>
                 <button className={`vtab ${view==="week"?"active":""}`} onClick={()=>setView("week")}>WK</button>
                 <button className={`vtab ${view==="month"?"active":""}`} onClick={()=>setView("month")}>Mes</button>
@@ -593,7 +632,7 @@ export default function App() {
                   setPicker={setPicker} removeW={removeW}
                   userHoursW={userHoursW} areaF={areaF} onUserClick={u=>setProfileUser(u)}
                   copied={copied} setCopied={setCopied} assignW={assignW}
-                  startDrag={startDrag} />
+                  startDrag={startDrag} dark={dark} D={D} />
               : <MonthCal users={visible} shifts={shifts} schedule={schedule} monthRef={monthRef}
                   dragging={dragging} dragOver={dragOver} setDragOver={setDragOver}
                   setPicker={setPicker} dropM={dropM} removeM={removeM} setDragging={setDragging} />
@@ -603,7 +642,7 @@ export default function App() {
       )}
 
       {/* ── TAREAS ── */}
-      {tab==="tasks" && <TasksTab users={users} />}
+      {tab==="tasks" && <TasksTab users={users} schedule={schedule} />}
 
       {/* ── PERSONAS ── */}
       {tab==="users" && (
@@ -688,7 +727,7 @@ export default function App() {
 }
 
 // ─── WEEK GRID ────────────────────────────────────────────────────────────────
-function WeekGrid({ users, shifts, dates, wSched, dragging, dragOver, setPicker, removeW, userHoursW, areaF, onUserClick, copied, setCopied, assignW, startDrag }) {
+function WeekGrid({ users, shifts, dates, wSched, dragging, dragOver, setPicker, removeW, userHoursW, areaF, onUserClick, copied, setCopied, assignW, startDrag, dark, D }) {
   const today=new Date(); today.setHours(0,0,0,0);
   const showSep=areaF==="Todas";
   const rows=[];
@@ -706,34 +745,34 @@ function WeekGrid({ users, shifts, dates, wSched, dragging, dragOver, setPicker,
       )}
       <table style={{borderCollapse:"collapse",width:"100%",minWidth:760}}>
         <thead>
-          <tr style={{background:"#FAFAFA"}}>
-            <th style={{padding:"10px 16px",textAlign:"left",fontSize:11,fontWeight:600,color:"#111",borderBottom:"1px solid #EBEBEB",position:"sticky",left:0,background:"#FAFAFA",zIndex:5,width:136}}>Persona</th>
+          <tr style={{background:D.tableHead}}>
+            <th style={{padding:"10px 16px",textAlign:"left",fontSize:11,fontWeight:600,color:D.text,borderBottom:`1px solid ${D.border}`,position:"sticky",left:0,background:D.tableHead,zIndex:5,width:136}}>Persona</th>
             {DAYS.map((day,di)=>{
               const d=dates[di], isToday=d&&d.toDateString()===today.toDateString(), isSun=di===6;
-              return <th key={day} style={{padding:"10px 6px",textAlign:"center",fontSize:11,fontWeight:600,color:isSun?"#CCC":"#111",borderBottom:"1px solid #EBEBEB",borderLeft:"1px solid #F0F0F0",minWidth:100}}>
+              return <th key={day} style={{padding:"10px 6px",textAlign:"center",fontSize:11,fontWeight:600,color:isSun?D.text3:D.text,borderBottom:`1px solid ${D.border}`,borderLeft:`1px solid ${D.border}`,minWidth:100}}>
                 <div style={{display:"inline-flex",flexDirection:"column",alignItems:"center",gap:2}}>
-                  <span style={{fontSize:9,color:"#BBB",fontWeight:500,textTransform:"uppercase",letterSpacing:".5px"}}>{DAY_SHORT[di]}</span>
-                  <span style={{fontSize:14,fontWeight:700,background:isToday?"#111":"transparent",color:isToday?"#fff":"inherit",borderRadius:5,padding:"2px 7px",lineHeight:1.3}}>{d?.getDate()}</span>
+                  <span style={{fontSize:9,color:D.text2,fontWeight:500,textTransform:"uppercase",letterSpacing:".5px"}}>{DAY_SHORT[di]}</span>
+                  <span style={{fontSize:14,fontWeight:700,background:isToday?D.text:"transparent",color:isToday?D.bg:"inherit",borderRadius:5,padding:"2px 7px",lineHeight:1.3}}>{d?.getDate()}</span>
                 </div>
               </th>;
             })}
-            <th style={{padding:"10px 8px",textAlign:"center",fontSize:11,fontWeight:600,color:"#111",borderBottom:"1px solid #EBEBEB",minWidth:50}}>hrs</th>
+            <th style={{padding:"10px 8px",textAlign:"center",fontSize:11,fontWeight:600,color:D.text,borderBottom:`1px solid ${D.border}`,minWidth:50}}>hrs</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((row,ri)=>{
-            if(row.sep) return <tr key={`s${ri}`}><td colSpan={9} style={{padding:"5px 16px",fontSize:9,fontWeight:700,color:"#CCC",textTransform:"uppercase",letterSpacing:"1px",background:"#FAFAFA",borderBottom:"1px solid #F5F5F5"}}>{row.label}</td></tr>;
+            if(row.sep) return <tr key={`s${ri}`}><td colSpan={9} style={{padding:"5px 16px",fontSize:9,fontWeight:700,color:D.text3,textTransform:"uppercase",letterSpacing:"1px",background:D.bg2,borderBottom:`1px solid ${D.border}`}}>{row.label}</td></tr>;
             const u=row.u, hrs=userHoursW(u.id), over=hrs>RULES.WEEK_H;
-            return <tr key={u.id} className="wrow" style={{borderBottom:"1px solid #F5F5F5"}}>
-              <td style={{padding:"6px 16px",position:"sticky",left:0,background:"#fff",zIndex:2,transition:"background .1s"}}>
+            return <tr key={u.id} className="wrow" style={{borderBottom:`1px solid ${D.border}`}}>
+              <td style={{padding:"6px 16px",position:"sticky",left:0,background:D.cell,zIndex:2}}>
                 <div style={{display:"flex",alignItems:"center",gap:8}}>
                   <div onPointerDown={e=>startDrag(e,{t:"user",uid:u.id})} className="no-select"
-                    style={{cursor:"grab",flexShrink:0}} title="Arrastra al horario">
+                    style={{cursor:"grab",flexShrink:0}}>
                     <Av name={u.name} color={u.color} size={22}/>
                   </div>
                   <div style={{cursor:"pointer",minWidth:0}} onClick={()=>onUserClick(u)}>
-                    <div style={{fontSize:12,fontWeight:500,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{u.name}</div>
-                    <div style={{fontSize:10,color:"#CCC"}}>{u.role}</div>
+                    <div style={{fontSize:12,fontWeight:500,color:D.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{u.name}</div>
+                    <div style={{fontSize:10,color:D.text3}}>{u.role}</div>
                   </div>
                 </div>
               </td>
@@ -744,17 +783,17 @@ function WeekGrid({ users, shifts, dates, wSched, dragging, dragOver, setPicker,
                   data-cellkey={`${day}||${u.id}`}
                   onClick={()=>{ if(!dragging){ if(isPasting){ assignW(day,u.id,copied.val); setCopied(null); } else if(!val) setPicker({day,uid:u.id}); } }}
                   onContextMenu={e=>{ e.preventDefault(); if(val&&!isSpec(val)) setCopied({val}); }}
-                  style={{padding:"4px 4px",borderRadius:isOver?6:0,borderLeft:"1px solid #F0F0F0",cursor:isPasting?"copy":dragging?"crosshair":"pointer"}}>
+                  style={{padding:"4px 4px",borderRadius:isOver?6:0,borderLeft:`1px solid ${D.border}`,cursor:isPasting?"copy":dragging?"crosshair":"pointer",background:D.cell}}>
                   <div style={{position:"relative",minHeight:38}} className={val?"cell-filled":""}>
                     {isOver && <div className="cell-drop-hint"/>}
-                    <CellTag val={val} shifts={shifts}/>
+                    <CellTag val={val} shifts={shifts} dark={dark}/>
                     {val && <button className="btn rm" onPointerDown={e=>e.stopPropagation()} onClick={e=>{ e.stopPropagation(); removeW(day,u.id); }}
-                      style={{position:"absolute",top:2,right:2,background:"rgba(255,255,255,.96)",color:"#AAA",fontSize:10,lineHeight:1,padding:"2px 4px",borderRadius:4,border:"1px solid #E8E8E8",opacity:0,zIndex:3}}>×</button>}
-                    {!val && <div style={{height:38,display:"flex",alignItems:"center",justifyContent:"center",color:isPasting?"#B45309":"#E0E0E0",fontSize:isOver?18:14,transition:"all .12s"}}>{isPasting?"↓":isOver?"+":" "}</div>}
+                      style={{position:"absolute",top:2,right:2,background:dark?"rgba(30,30,30,.95)":"rgba(255,255,255,.96)",color:D.text2,fontSize:10,lineHeight:1,padding:"2px 4px",borderRadius:4,border:`1px solid ${D.border}`,opacity:0,zIndex:3}}>×</button>}
+                    {!val && <div style={{height:38,display:"flex",alignItems:"center",justifyContent:"center",color:isPasting?"#B45309":D.border2,fontSize:isOver?18:14,transition:"all .12s"}}>{isPasting?"↓":isOver?"+":" "}</div>}
                   </div>
                 </td>;
               })}
-              <td style={{textAlign:"center",fontSize:12,fontWeight:600,color:over?"#9B2335":hrs>=42?"#3D7A61":"#777",paddingRight:8,whiteSpace:"nowrap"}}>{hrs.toFixed(1)}</td>
+              <td style={{textAlign:"center",fontSize:12,fontWeight:600,color:over?"#9B2335":hrs>=42?"#3D7A61":D.text2,paddingRight:8,whiteSpace:"nowrap"}}>{hrs.toFixed(1)}</td>
             </tr>;
           })}
         </tbody>
@@ -859,7 +898,7 @@ function getPlanchaForDay(dateObj){
   return PLANCHA_USERS[planchaIdx];
 }
 
-function TasksTab({ users }) {
+function TasksTab({ users, schedule }) {
   const [wo, setWo] = useState(0);
   const [rotNames, setRotNames] = useState(()=>JSON.parse(localStorage.getItem("so_rot_names")||JSON.stringify(ROTATING_TASKS)));
   const [fixNames, setFixNames] = useState(()=>JSON.parse(localStorage.getItem("so_fix_names")||JSON.stringify(FIXED_TASKS)));
@@ -969,26 +1008,42 @@ function TasksTab({ users }) {
               const dateKey=`col-${date?.toDateString()}`;
               const assignedId=colacion[dateKey];
               const assigned=kitchenUsers.find(u=>u.id===assignedId);
+
+              // Only show users who have a real shift that day (not libre/falta/etc)
+              const wo2=dateToWO(date);
+              const wk2=wKey(wo2);
+              const daySched=schedule[wk2]||{};
+              const availableUsers=kitchenUsers.filter(u=>{
+                const v=daySched[`${day}-${u.id}`];
+                return v && !Object.values(SPECIAL).some(s=>s.id===v);
+              });
+
+              // If assigned user no longer has shift, clear it
+              const assignedStillWorking=assigned && availableUsers.some(u=>u.id===assigned.id);
+
               return (
                 <tr key={day} className="task-row" style={{borderBottom:di<6?"1px solid #F5F5F5":"none"}}>
                   <td style={{padding:"9px 14px",fontSize:12,fontWeight:500,color:"#111"}}>{day}</td>
                   <td style={{padding:"9px 14px",fontSize:12,color:"#888"}}>{date?.toLocaleDateString("es-CL",{day:"numeric",month:"short"})}</td>
                   <td style={{padding:"7px 14px"}}>
-                    <div style={{display:"flex",alignItems:"center",gap:10}}>
-                      {assigned
-                        ? <div style={{display:"flex",alignItems:"center",gap:8,flex:1}}>
-                            <Av name={assigned.name} color={assigned.color} size={22}/>
-                            <span style={{fontSize:12,fontWeight:500,color:"#111"}}>{assigned.name}</span>
-                            <button className="btn" onClick={()=>setColDay(dateKey,null)}
-                              style={{marginLeft:"auto",color:"#CCC",fontSize:12,background:"none",padding:"0 4px"}}>×</button>
-                          </div>
-                        : <select value="" onChange={e=>{ if(e.target.value) setColDay(dateKey,e.target.value); }}
-                            style={{fontSize:12,color:"#888",background:"#FAFAFA",border:"1px solid #EBEBEB",borderRadius:5,padding:"4px 8px",width:180,cursor:"pointer"}}>
-                            <option value="">Sin asignar...</option>
-                            {kitchenUsers.map(u=><option key={u.id} value={u.id}>{u.name}</option>)}
-                          </select>
-                      }
-                    </div>
+                    {availableUsers.length===0
+                      ? <span style={{fontSize:12,color:"#CCC"}}>Sin turnos asignados</span>
+                      : <div style={{display:"flex",alignItems:"center",gap:10}}>
+                          {assignedStillWorking
+                            ? <div style={{display:"flex",alignItems:"center",gap:8,flex:1}}>
+                                <Av name={assigned.name} color={assigned.color} size={22}/>
+                                <span style={{fontSize:12,fontWeight:500,color:"#111"}}>{assigned.name}</span>
+                                <button className="btn" onClick={()=>setColDay(dateKey,null)}
+                                  style={{marginLeft:"auto",color:"#CCC",fontSize:12,background:"none",padding:"0 4px"}}>×</button>
+                              </div>
+                            : <select value="" onChange={e=>{ if(e.target.value) setColDay(dateKey,e.target.value); }}
+                                style={{fontSize:12,color:"#888",background:"#FAFAFA",border:"1px solid #EBEBEB",borderRadius:5,padding:"4px 8px",width:180,cursor:"pointer",fontFamily:"inherit"}}>
+                                <option value="">Sin asignar...</option>
+                                {availableUsers.map(u=><option key={u.id} value={u.id}>{u.name}</option>)}
+                              </select>
+                          }
+                        </div>
+                    }
                   </td>
                 </tr>
               );
@@ -996,7 +1051,7 @@ function TasksTab({ users }) {
           </tbody>
         </table>
       </div>
-      <div style={{fontSize:10,color:"#CCC",marginBottom:28,paddingLeft:2}}>Una persona de cocina cubre la colación por día.</div>
+      <div style={{fontSize:10,color:"#CCC",marginBottom:28,paddingLeft:2}}>Solo aparecen personas con turno asignado ese día.</div>
 
       {/* ── ROTATIVAS ── */}
       <SectionTitle>Tareas rotativas</SectionTitle>
@@ -1548,20 +1603,21 @@ function Av({ name, color, size=24 }) {
   return <div style={{width:size,height:size,borderRadius:"50%",background:color,display:"flex",alignItems:"center",justifyContent:"center",fontSize:size*0.4,fontWeight:700,color:"#fff",flexShrink:0}}>{name.charAt(0).toUpperCase()}</div>;
 }
 
-function CellTag({ val, shifts }) {
+function CellTag({ val, shifts, dark }) {
   if(!val) return null;
   if(isSpec(val)){
     const st=getSpec(val);
-    return <div style={{background:st.bg,border:`1px solid ${st.border}`,borderRadius:6,padding:"4px 7px",display:"flex",alignItems:"center",gap:4}}>
-      <span style={{fontSize:10,fontWeight:700,color:st.color,lineHeight:1}}>{st.sym}</span>
-      <span style={{fontSize:10,fontWeight:500,color:st.color}}>{st.label}</span>
+    return <div style={{background:dark?`${st.color}22`:st.bg,border:`1px solid ${dark?st.color+"44":st.border}`,borderRadius:6,padding:"4px 7px"}}>
+      <div style={{fontSize:10,fontWeight:600,color:st.color,lineHeight:1.3}}>
+        {st.sym?`${st.sym} ${st.label}`:st.label}
+      </div>
     </div>;
   }
   const s=shifts.find(x=>x.id===val);
   if(!s) return null;
-  return <div style={{background:`${s.color}12`,border:`1px solid ${s.color}28`,borderRadius:6,padding:"4px 7px"}}>
+  return <div style={{background:dark?`${s.color}22`:`${s.color}12`,border:`1px solid ${dark?s.color+"44":`${s.color}28`}`,borderRadius:6,padding:"4px 7px"}}>
     <div style={{fontSize:10,fontWeight:600,color:s.color,lineHeight:1.3}}>{s.name}</div>
-    <div style={{fontSize:9,color:`${s.color}99`,marginTop:1}}>{s.start}–{s.end}</div>
+    <div style={{fontSize:9,color:`${s.color}88`,marginTop:1}}>{s.start}–{s.end}</div>
   </div>;
 }
 
