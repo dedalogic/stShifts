@@ -199,6 +199,7 @@ function checkRules(sched,users,shifts,wk) {
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [extra,    setExtra]    = useState(loadExtra);
+  const [hidden,   setHidden]   = useState(()=>JSON.parse(localStorage.getItem("so_hidden")||"[]"));
   const [shifts,   setShifts]   = useState(loadShifts);
   const [schedule, setSchedule] = useState(loadSchedule);
   const [wo,       setWo]       = useState(0);
@@ -264,13 +265,14 @@ export default function App() {
   const delCell_ref=useRef(null);
   delCell_ref.current=(day,uid)=>removeW(day,uid);
 
-  const users = [...FIXED_USERS, ...extra];
+  const users = [...FIXED_USERS, ...extra].filter(u=>!hidden.includes(u.id));
   const visible = areaF==="Todas" ? users : users.filter(u=>u.area===areaF);
   const wk = wKey(wo);
   const dates = weekDates(wo);
   const wSched = schedule[wk]||{};
 
   useEffect(()=>{ localStorage.setItem("so_extra",   JSON.stringify(extra));    },[extra]);
+  useEffect(()=>{ localStorage.setItem("so_hidden",  JSON.stringify(hidden));   },[hidden]);
   useEffect(()=>{ localStorage.setItem("so_shifts",  JSON.stringify(shifts));   },[shifts]);
   useEffect(()=>{ localStorage.setItem("so_schedule",JSON.stringify(schedule)); },[schedule]);
   useEffect(()=>{ localStorage.setItem("so_templates",JSON.stringify(templates)); },[templates]);
@@ -375,7 +377,7 @@ export default function App() {
   }
 
   function saveBackup() {
-    const keys = ["so_extra","so_shifts","so_schedule","so_rot_names","so_fix_names","so_colacion","so_plancha","so_templates"];
+    const keys = ["so_extra","so_shifts","so_schedule","so_rot_names","so_fix_names","so_colacion","so_plancha","so_templates","so_hidden"];
     const data = {};
     keys.forEach(k=>{ const v=localStorage.getItem(k); if(v) data[k]=v; });
     data.__version = "1";
@@ -398,7 +400,7 @@ export default function App() {
         try {
           const data = JSON.parse(ev.target.result);
           if(!data.__version) { alert("Archivo no válido."); return; }
-          const keys = ["so_extra","so_shifts","so_schedule","so_rot_names","so_fix_names","so_colacion","so_plancha","so_templates"];
+          const keys = ["so_extra","so_shifts","so_schedule","so_rot_names","so_fix_names","so_colacion","so_plancha","so_templates","so_hidden"];
           keys.forEach(k=>{ if(data[k]!=null) localStorage.setItem(k,data[k]); });
           window.location.reload();
         } catch { alert("Error al leer el archivo."); }
@@ -660,24 +662,43 @@ export default function App() {
       {tab==="users" && (
         <div style={{maxWidth:680,margin:"32px auto",padding:"0 24px"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:24}}>
-            <div><div style={{fontSize:18,fontWeight:700}}>Personas</div><div style={{fontSize:13,color:"#888",marginTop:2}}>{users.length} personas</div></div>
+            <div><div style={{fontSize:18,fontWeight:700}}>Personas</div><div style={{fontSize:13,color:"#888",marginTop:2}}>{[...FIXED_USERS,...extra].filter(u=>!hidden.includes(u.id)).length} personas</div></div>
             <button className="btn" onClick={()=>{ setEditUser(null); setUserModal(true); }} style={{background:"#111",color:"#fff",padding:"7px 14px",borderRadius:6,fontSize:13,fontWeight:500}}>+ Nueva persona</button>
           </div>
-          {["Cocina","Caja"].map(area=>(
-            <div key={area} style={{marginBottom:28}}>
-              <div style={{fontSize:11,fontWeight:700,color:"#AAA",textTransform:"uppercase",letterSpacing:".7px",marginBottom:10}}>{area}</div>
-              {users.filter(u=>u.area===area).map(u=>(
-                <div key={u.id} className="urow" style={{display:"flex",alignItems:"center",gap:12,padding:"10px 14px",borderRadius:8,marginBottom:3,border:"1px solid #F0F0F0",cursor:"pointer"}} onClick={()=>setProfileUser(u)}>
-                  <Av name={u.name} color={u.color} size={32}/>
-                  <div style={{flex:1}}><div style={{fontSize:14,fontWeight:500}}>{u.name}</div><div style={{fontSize:12,color:"#AAA"}}>{u.role||"Sin cargo"}</div></div>
-                  <div style={{display:"flex",gap:6}} onClick={e=>e.stopPropagation()}>
-                    <button className="btn" onClick={()=>{ setEditUser(u); setUserModal(true); }} style={{background:"#F5F5F5",color:"#333",padding:"5px 11px",borderRadius:5,fontSize:12}}>Editar</button>
-                    {!FIXED_USERS.some(f=>f.id===u.id) && <button className="btn" onClick={()=>setExtra(p=>p.filter(x=>x.id!==u.id))} style={{background:"#FBF0F0",color:"#9B2335",padding:"5px 11px",borderRadius:5,fontSize:12}}>Eliminar</button>}
-                  </div>
-                </div>
-              ))}
-            </div>
-          ))}
+          {["Cocina","Caja"].map(area=>{
+            const allInArea=[...FIXED_USERS,...extra].filter(u=>u.area===area);
+            return (
+              <div key={area} style={{marginBottom:28}}>
+                <div style={{fontSize:11,fontWeight:700,color:"#AAA",textTransform:"uppercase",letterSpacing:".7px",marginBottom:10}}>{area}</div>
+                {allInArea.map(u=>{
+                  const isHidden=hidden.includes(u.id);
+                  const isFixed=FIXED_USERS.some(f=>f.id===u.id);
+                  return (
+                    <div key={u.id} className="urow" style={{display:"flex",alignItems:"center",gap:12,padding:"10px 14px",borderRadius:8,marginBottom:3,border:`1px solid ${D.border}`,cursor:"pointer",background:D.bg}} onClick={()=>setProfileUser(u)}>
+                      <Av name={u.name} color={u.color} size={32}/>
+                      <div style={{flex:1}}>
+                        <div style={{fontSize:14,fontWeight:500,color:D.text}}>{u.name}</div>
+                        <div style={{fontSize:12,color:D.text2}}>{u.role||"Sin cargo"}</div>
+                      </div>
+                      <div style={{display:"flex",gap:6}} onClick={e=>e.stopPropagation()}>
+                        <button className="btn" onClick={()=>{ setEditUser(u); setUserModal(true); }} style={{background:D.bg3,color:D.text,padding:"5px 9px",borderRadius:5,fontSize:12}}>Editar</button>
+                        <button className="btn" title={`Eliminar ${u.name}`} onClick={()=>{
+                          if(window.confirm(`¿Eliminar a ${u.name}? Se borrará del horario permanentemente.`)){
+                            if(isFixed) setHidden(p=>[...p,u.id]);
+                            else setExtra(p=>p.filter(x=>x.id!==u.id));
+                          }
+                        }} style={{background:"none",border:`1px solid ${D.border}`,color:"#9B2335",padding:"5px 8px",borderRadius:5,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                            <path d="M1.5 3h9M4.5 3V2h3v1M5 5.5v3M7 5.5v3M2.5 3l.5 7h6l.5-7" stroke="#9B2335" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
         </div>
       )}
 
