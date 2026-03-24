@@ -97,11 +97,10 @@ function getRotatingAssignment(weekOffset) {
 }
 
 function getFixedAssignment(weekOffset) {
-  const n = FIXED_TASKS.length; // 5
+  // Fixed tasks never rotate — always same person, same task regardless of week
   const result = {};
   ROTATION_USER_ORDER.forEach((uid, userIdx) => {
-    const taskIdx = ((ANCHOR_FIXED_OFFSET + userIdx + weekOffset) % n + n) % n;
-    result[uid] = FIXED_TASKS[taskIdx];
+    result[uid] = FIXED_TASKS[userIdx % FIXED_TASKS.length];
   });
   return result;
 }
@@ -1034,8 +1033,8 @@ function TasksTab({ users, schedule, dark }) {
     return result;
   }
   function getFixAssignment(wo){
-    const n=fixNames.length; const result={};
-    ROTATION_USER_ORDER.forEach((uid,ui)=>{ result[uid]=fixNames[((ANCHOR_FIXED_OFFSET+ui+wo)%n+n)%n]; });
+    const result={};
+    ROTATION_USER_ORDER.forEach((uid,ui)=>{ result[uid]=fixNames[ui % fixNames.length]; });
     return result;
   }
 
