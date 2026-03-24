@@ -499,8 +499,9 @@ export default function App() {
     <div style={{fontFamily:"'Inter',sans-serif",background:D.bg,minHeight:"100vh",color:D.text,colorScheme:dark?"dark":"light"}}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-        *{box-sizing:border-box;margin:0;padding:0;user-select:none;-webkit-user-select:none;}
-        ::-webkit-scrollbar{width:4px;height:4px;}
+        *{box-sizing:border-box;margin:0;padding:0;}
+        .no-select,button,.sb-row,.cell-plus,.fill-handle{user-select:none;-webkit-user-select:none;-webkit-user-drag:none;}
+        input,select,textarea{user-select:text!important;-webkit-user-select:text!important;}        ::-webkit-scrollbar{width:4px;height:4px;}
         ::-webkit-scrollbar-thumb{background:${D.scrollThumb};border-radius:4px;}
         ::-webkit-scrollbar-track{background:transparent;}
         .btn{cursor:pointer;border:none;font-family:'Inter',sans-serif;transition:all .18s cubic-bezier(.4,0,.2,1);}
@@ -525,8 +526,8 @@ export default function App() {
         .nav-btn{background:none;border:1px solid ${D.btnBorder};border-radius:6px;padding:5px 10px;cursor:pointer;font-size:13px;color:${D.text};font-family:'Inter',sans-serif;transition:all .15s;}
         .nav-btn:hover{background:${D.bg3};border-color:${D.border2};}
         .nav-btn:active{transform:scale(.97);}
-        .wcell{transition:background .12s;cursor:pointer;position:relative;user-select:none;-webkit-user-drag:none;}
-        .wcell *{user-select:none;-webkit-user-drag:none;-webkit-user-select:none;}
+        .wcell{transition:background .12s;cursor:pointer;position:relative;}
+        .wcell *{user-select:none;-webkit-user-select:none;-webkit-user-drag:none;}
         .wcell:hover{background:${D.cellHover}!important;}
         .drag-ov{background:${dark?"#222":"#F8F8F8"}!important;}
         .wrow td{transition:background .1s;}
