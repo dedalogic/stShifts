@@ -11,19 +11,61 @@ const PALETTE = [
   "#708090","#5C7A6B","#7A6B5C","#6B5C7A","#5C6B7A",
 ];
 
-// ─── FIXED USERS (always present, not deletable) ──────────────────────────────
-const FIXED_USERS = [
-  { id:"u1",  name:"Miriam Muñoz",  role:"Cocinera", area:"Cocina", color:"#4B6CB7" },
-  { id:"u2",  name:"Bettys Corona", role:"Cocinera", area:"Cocina", color:"#2E7D8C" },
-  { id:"u3",  name:"Carmen",        role:"Cocinera", area:"Cocina", color:"#5A7A5A" },
-  { id:"u4",  name:"Roxedy",        role:"Cocinera", area:"Cocina", color:"#7A5A8C" },
-  { id:"u5",  name:"Ayerim",        role:"Cocinera", area:"Cocina", color:"#8C6A3A" },
-  { id:"u6",  name:"Rocío",         role:"Cajera",   area:"Caja",   color:"#3A6A8C" },
-  { id:"u7",  name:"Fernanda",      role:"Cajera",   area:"Caja",   color:"#6A3A5A" },
-  { id:"u8",  name:"Liz",           role:"Cajera",   area:"Caja",   color:"#5A8C6A" },
-  { id:"u9",  name:"Sabrina",       role:"Cajera",   area:"Caja",   color:"#8C3A3A" },
-  { id:"u10", name:"Alicia",        role:"Cajera",   area:"Caja",   color:"#6A5A3A" },
-];
+// ─── COMPANIES ────────────────────────────────────────────────────────────────
+const COMPANIES = {
+  sf: {
+    id:"sf", name:"Street Flags", prefix:"sf_",
+    areas:["Cocina","Caja"],
+    fixedUsers:[
+      { id:"u1",  name:"Miriam Muñoz",  role:"Cocinera", area:"Cocina", color:"#4B6CB7" },
+      { id:"u2",  name:"Bettys Corona", role:"Cocinera", area:"Cocina", color:"#2E7D8C" },
+      { id:"u3",  name:"Carmen",        role:"Cocinera", area:"Cocina", color:"#5A7A5A" },
+      { id:"u4",  name:"Roxedy",        role:"Cocinera", area:"Cocina", color:"#7A5A8C" },
+      { id:"u5",  name:"Ayerim",        role:"Cocinera", area:"Cocina", color:"#8C6A3A" },
+      { id:"u6",  name:"Rocío",         role:"Cajera",   area:"Caja",   color:"#3A6A8C" },
+      { id:"u7",  name:"Fernanda",      role:"Cajera",   area:"Caja",   color:"#6A3A5A" },
+      { id:"u8",  name:"Liz",           role:"Cajera",   area:"Caja",   color:"#5A8C6A" },
+      { id:"u9",  name:"Sabrina",       role:"Cajera",   area:"Caja",   color:"#8C3A3A" },
+      { id:"u10", name:"Alicia",        role:"Cajera",   area:"Caja",   color:"#6A5A3A" },
+    ],
+    rotationOrder:["u5","u4","u1","u2","u3"],
+    rotatingTasks:["Mantenedor y Ventanas","Repisa","Lavaplatos y porta novas","Basureros","Estante blanco y de verduras","Cocina y mesón del medio","Freidoras y calentador de papas"],
+    fixedTasks:["Congelador","Refrigerador Horizontal","Refrigerador Salsera","Campana y Plancha","Refrigerador Vertical"],
+    anchorTaskOffset:3,
+    hasPlancha:true,
+    planchaExclude:"u1",
+    kitchenArea:"Cocina",
+  },
+  mf: {
+    id:"mf", name:"Mafia", prefix:"mf_",
+    areas:["Cocina","Salón"],
+    fixedUsers:[
+      { id:"m1",  name:"Yhonathan",  role:"Cocinero",  area:"Cocina", color:"#4B6CB7" },
+      { id:"m2",  name:"Elizabeth",  role:"Cocinera",  area:"Cocina", color:"#2E7D8C" },
+      { id:"m3",  name:"Valentina",  role:"Cocinera",  area:"Cocina", color:"#5A7A5A" },
+      { id:"m4",  name:"Eva",        role:"Cocinera",  area:"Cocina", color:"#7A5A8C" },
+      { id:"m5",  name:"Blanca",     role:"Cocinera",  area:"Cocina", color:"#8C6A3A" },
+      { id:"m6",  name:"Grimanesa",  role:"Salón",     area:"Salón",  color:"#3A6A8C" },
+      { id:"m7",  name:"Karla",      role:"Salón",     area:"Salón",  color:"#6A3A5A" },
+      { id:"m8",  name:"Leonella",   role:"Salón",     area:"Salón",  color:"#5A8C6A" },
+      { id:"m9",  name:"Pablo",      role:"Salón",     area:"Salón",  color:"#8C3A3A" },
+      { id:"m10", name:"Alicia",     role:"Salón",     area:"Salón",  color:"#6A5A3A" },
+    ],
+    rotationOrder:["m1","m2","m3","m4","m5"],
+    rotatingTasks:[
+      "Estación Pasta/Hornos",
+      "Estación Lavado/Cocina",
+      "Estación Almacenamiento",
+      "Estación Higiene/Interior",
+      "Estación Pizza",
+    ],
+    fixedTasks:[],
+    anchorTaskOffset:0,
+    hasPlancha:false,
+    planchaExclude:null,
+    kitchenArea:"Cocina",
+  },
+};
 
 const DEFAULT_SHIFTS = [
   { id:"am1", name:"AM Apertura", start:"09:00", end:"18:30", color:"#4B6CB7" },
@@ -198,10 +240,14 @@ function checkRules(sched,users,shifts,wk) {
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
-  const [extra,    setExtra]    = useState(loadExtra);
-  const [hidden,   setHidden]   = useState(()=>JSON.parse(localStorage.getItem("so_hidden")||"[]"));
-  const [shifts,   setShifts]   = useState(loadShifts);
-  const [schedule, setSchedule] = useState(loadSchedule);
+  const [companyId, setCompanyId] = useState(()=>localStorage.getItem("so_company")||"sf");
+  const company = COMPANIES[companyId];
+  const pfx = company.prefix;
+
+  const [extra,    setExtra]    = useState(()=>{ const r=localStorage.getItem(pfx+"extra"); return r?JSON.parse(r):[]; });
+  const [hidden,   setHidden]   = useState(()=>JSON.parse(localStorage.getItem(pfx+"hidden")||"[]"));
+  const [shifts,   setShifts]   = useState(()=>{ const r=localStorage.getItem(pfx+"shifts"); return r?JSON.parse(r):DEFAULT_SHIFTS; });
+  const [schedule, setSchedule] = useState(()=>{ const r=localStorage.getItem(pfx+"schedule"); return r?JSON.parse(r):{}; });
   const [wo,       setWo]       = useState(0);
   const [view,     setView]     = useState("week");
   const [tab,      setTab]      = useState("schedule");
@@ -220,7 +266,7 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [reportModal, setReportModal] = useState(false);
   const [templateModal, setTemplateModal] = useState(false);
-  const [templates, setTemplates] = useState(()=>JSON.parse(localStorage.getItem("so_templates")||"[]"));
+  const [templates, setTemplates] = useState(()=>JSON.parse(localStorage.getItem(pfx+"templates")||"[]"));
   const [dark,     setDark]     = useState(()=>localStorage.getItem("so_dark")==="1");
   const [monthRef, setMonthRef] = useState(()=>{ const n=new Date(); return{y:n.getFullYear(),m:n.getMonth()}; });
 
@@ -265,18 +311,21 @@ export default function App() {
   const delCell_ref=useRef(null);
   delCell_ref.current=(day,uid)=>removeW(day,uid);
 
+  const FIXED_USERS = company.fixedUsers;
   const users = [...FIXED_USERS, ...extra].filter(u=>!hidden.includes(u.id));
   const visible = areaF==="Todas" ? users : users.filter(u=>u.area===areaF);
   const wk = wKey(wo);
   const dates = weekDates(wo);
   const wSched = schedule[wk]||{};
 
-  useEffect(()=>{ localStorage.setItem("so_extra",   JSON.stringify(extra));    },[extra]);
-  useEffect(()=>{ localStorage.setItem("so_hidden",  JSON.stringify(hidden));   },[hidden]);
-  useEffect(()=>{ localStorage.setItem("so_shifts",  JSON.stringify(shifts));   },[shifts]);
-  useEffect(()=>{ localStorage.setItem("so_schedule",JSON.stringify(schedule)); },[schedule]);
-  useEffect(()=>{ localStorage.setItem("so_templates",JSON.stringify(templates)); },[templates]);
-  useEffect(()=>{ localStorage.setItem("so_dark", dark?"1":"0"); },[dark]);
+  useEffect(()=>{ localStorage.setItem("so_company", companyId); },[companyId]);
+  useEffect(()=>{ localStorage.setItem(pfx+"extra",   JSON.stringify(extra));    },[extra,pfx]);
+  useEffect(()=>{ localStorage.setItem(pfx+"hidden",  JSON.stringify(hidden));   },[hidden,pfx]);
+  useEffect(()=>{ localStorage.setItem(pfx+"shifts",  JSON.stringify(shifts));   },[shifts,pfx]);
+  useEffect(()=>{ localStorage.setItem(pfx+"schedule",JSON.stringify(schedule)); },[schedule,pfx]);
+  useEffect(()=>{ localStorage.setItem(pfx+"templates",JSON.stringify(templates)); },[templates,pfx]);
+  useEffect(()=>{ localStorage.setItem(pfx+"schedule",JSON.stringify(schedule)); },[schedule,pfx]);
+  useEffect(()=>{ localStorage.setItem(pfx+"dark", dark?"1":"0"); },[dark]);
   useEffect(()=>{ setAlerts(checkRules(schedule,visible,shifts,wk)); },[schedule,extra,areaF,shifts,wk]);
 
   const setCell=(wk2,dn,uid,val)=>setSchedule(p=>({...p,[wk2]:{...(p[wk2]||{}),[`${dn}-${uid}`]:val}}));
@@ -324,6 +373,36 @@ export default function App() {
   }
 
   function ghostLabel(d){ if(!d) return {label:"",color:"#888"}; if(d.t==="user"){ const u=users.find(x=>x.id===d.uid); return {label:u?.name||"",color:u?.color||"#888"}; } if(d.t==="shift"){ const s=shifts.find(x=>x.id===d.id); return {label:s?.name||"",color:s?.color||"#888"}; } if(d.t==="special"){ const st=Object.values(SPECIAL).find(x=>x.id===d.id); return {label:st?.label||"",color:st?.color||"#888"}; } return {label:"",color:"#888"}; }
+
+  function switchCompany(newId){
+    if(newId===companyId) return;
+    const newCo=COMPANIES[newId];
+    const np=newCo.prefix;
+    // Update all state synchronously before changing company
+    const newExtra = JSON.parse(localStorage.getItem(np+"extra")||"[]");
+    const newHidden = JSON.parse(localStorage.getItem(np+"hidden")||"[]");
+    const newShifts = JSON.parse(localStorage.getItem(np+"shifts")||JSON.stringify(DEFAULT_SHIFTS));
+    const newSchedule = JSON.parse(localStorage.getItem(np+"schedule")||"{}");
+    const newTemplates = JSON.parse(localStorage.getItem(np+"templates")||"[]");
+    // Save current company data first
+    localStorage.setItem(pfx+"extra",    JSON.stringify(extra));
+    localStorage.setItem(pfx+"shifts",   JSON.stringify(shifts));
+    localStorage.setItem(pfx+"schedule", JSON.stringify(schedule));
+    localStorage.setItem(pfx+"templates",JSON.stringify(templates));
+    localStorage.setItem(pfx+"hidden",   JSON.stringify(hidden));
+    localStorage.setItem("so_company", newId);
+    setExtra(newExtra);
+    setHidden(newHidden);
+    setShifts(newShifts);
+    setSchedule(newSchedule);
+    setTemplates(newTemplates);
+    setCompanyId(newId);
+    setAreaF("Todas");
+    setWo(0);
+    setPicker(null);
+    setDragging(null);
+    setGhostPos(null);
+  }
 
   function startDrag(e,payload){
     e.preventDefault();
@@ -377,15 +456,16 @@ export default function App() {
   }
 
   function saveBackup() {
-    const keys = ["so_extra","so_shifts","so_schedule","so_rot_names","so_fix_names","so_colacion","so_plancha","so_templates","so_hidden"];
+    const suffixes = ["extra","shifts","schedule","rot_names","fix_names","colacion","plancha","templates","hidden"];
     const data = {};
-    keys.forEach(k=>{ const v=localStorage.getItem(k); if(v) data[k]=v; });
-    data.__version = "1";
+    suffixes.forEach(s=>{ const v=localStorage.getItem(pfx+s); if(v) data[pfx+s]=v; });
+    data.__version = "2";
+    data.__company = companyId;
     data.__saved = new Date().toISOString();
     const blob = new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `stShifts_backup_${new Date().toLocaleDateString("es-CL").replace(/\//g,"-")}.json`;
+    a.download = `stShifts_${company.name}_${new Date().toLocaleDateString("es-CL").replace(/\//g,"-")}.json`;
     a.click();
     setTimeout(()=>URL.revokeObjectURL(a.href),5000);
   }
@@ -400,8 +480,8 @@ export default function App() {
         try {
           const data = JSON.parse(ev.target.result);
           if(!data.__version) { alert("Archivo no válido."); return; }
-          const keys = ["so_extra","so_shifts","so_schedule","so_rot_names","so_fix_names","so_colacion","so_plancha","so_templates","so_hidden"];
-          keys.forEach(k=>{ if(data[k]!=null) localStorage.setItem(k,data[k]); });
+          // Restore all keys from the backup
+          Object.entries(data).forEach(([k,v])=>{ if(!k.startsWith("__")) localStorage.setItem(k,v); });
           window.location.reload();
         } catch { alert("Error al leer el archivo."); }
       };
@@ -483,13 +563,18 @@ export default function App() {
 
       {/* ── NAV ── */}
       <div style={{borderBottom:`1px solid ${D.navBorder}`,padding:"0 20px",display:"flex",alignItems:"center",gap:14,height:50,background:D.nav}}>
-        <span style={{fontWeight:700,fontSize:14,letterSpacing:"-0.4px",color:D.text}}>stShifts</span>
-        <div style={{display:"flex",gap:2}}>
-          {[["schedule","Horario"],["tasks","Tareas"],["users","Personas"],["shifts","Turnos"]].map(([t,l])=>(
-            <button key={t} className={`tab ${tab===t?"active":""}`} onClick={()=>setTab(t)}>{l}</button>
-          ))}
-        </div>
+        <span style={{fontWeight:700,fontSize:14,letterSpacing:"-0.4px",color:D.text}}>{company.name}</span>
         <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:5}}>
+          {/* Company toggle */}
+          <button className="btn" onClick={()=>switchCompany(companyId==="sf"?"mf":"sf")}
+            title={`Cambiar a ${companyId==="sf"?"Mafia":"Street Flags"}`}
+            style={{background:"none",border:`1px solid ${D.btnBorder}`,borderRadius:6,padding:"6px 7px",display:"flex",alignItems:"center",justifyContent:"center"}}>
+            <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+              <rect x="1" y="5" width="11" height="7" rx="1" stroke={D.text2} strokeWidth="1.2"/>
+              <path d="M4 5V3.5C4 2.67 4.67 2 5.5 2h2C8.33 2 9 2.67 9 3.5V5" stroke={D.text2} strokeWidth="1.2"/>
+              <path d="M4 8.5h2M7 8.5h2" stroke={D.text2} strokeWidth="1.2" strokeLinecap="round"/>
+            </svg>
+          </button>
           {/* Dark mode toggle */}
           <button className="btn" onClick={()=>setDark(d=>!d)} title={dark?"Modo claro":"Modo oscuro"}
             style={{background:"none",border:`1px solid ${D.btnBorder}`,borderRadius:6,padding:"6px 7px",display:"flex",alignItems:"center",justifyContent:"center"}}>
@@ -611,7 +696,16 @@ export default function App() {
           {/* Main */}
           <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:D.bg}}>
             <div style={{padding:"8px 16px",borderBottom:`1px solid ${D.border}`,display:"flex",alignItems:"center",gap:9,flexShrink:0,paddingLeft:44,background:D.bg}}>
-              <div style={{background:"#F3F4F6",borderRadius:6,padding:3,display:"flex",gap:1}}>
+              {/* Tabs */}
+              <div style={{display:"flex",gap:2,marginRight:8}}>
+                {[["schedule","Horario"],["tasks","Tareas"],["users","Personas"],["shifts","Turnos"]].map(([t,l])=>(
+                  <button key={t} className={`tab ${tab===t?"active":""}`} onClick={()=>setTab(t)}
+                    style={{padding:"4px 10px",fontSize:12}}>{l}</button>
+                ))}
+              </div>
+              <div style={{width:1,height:18,background:D.border,flexShrink:0}}/>
+              {tab==="schedule" && <>
+              <div style={{background:D.bg3,borderRadius:6,padding:3,display:"flex",gap:1}}>
                 <button className={`vtab ${view==="week"?"active":""}`} onClick={()=>setView("week")}>WK</button>
                 <button className={`vtab ${view==="month"?"active":""}`} onClick={()=>setView("month")}>Mes</button>
               </div>
@@ -625,20 +719,21 @@ export default function App() {
                 <button className="nav-btn" onClick={()=>setMonthRef(m=>{ const d=new Date(m.y,m.m-1,1); return{y:d.getFullYear(),m:d.getMonth()}; })}>‹</button>
                 <span style={{fontSize:13,fontWeight:500,color:D.text,minWidth:130,textAlign:"center"}}>{MONTH_NAMES[monthRef.m]} {monthRef.y}</span>
                 <button className="nav-btn" onClick={()=>setMonthRef(m=>{ const d=new Date(m.y,m.m+1,1); return{y:d.getFullYear(),m:d.getMonth()}; })}>›</button>
-                <button className="nav-btn" onClick={()=>{ const n=new Date(); setMonthRef({y:n.getFullYear(),m:n.getMonth()}); }} style={{fontSize:11,color:"#999",background:(()=>{const n=new Date();return monthRef.m===n.getMonth()&&monthRef.y===n.getFullYear()?"#F0F0F0":"none";})()}}>Hoy</button>
+                <button className="nav-btn" onClick={()=>{ const n=new Date(); setMonthRef({y:n.getFullYear(),m:n.getMonth()}); }} style={{fontSize:11,color:"#999",background:(()=>{const n=new Date();return monthRef.m===n.getMonth()&&monthRef.y===n.getFullYear()?D.bg3:"none";})()}}>Hoy</button>
               </>}
               <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:8}}>
-                <div style={{display:"flex",gap:2,background:"#F3F4F6",borderRadius:6,padding:3}}>
-                  {["Todas","Cocina","Caja"].map(a=>(
+                <div style={{display:"flex",gap:2,background:D.bg3,borderRadius:6,padding:3}}>
+                  {["Todas",...company.areas].map(a=>(
                     <button key={a} className={`atab ${areaF===a?"active":""}`} onClick={()=>setAreaF(a)}>{a}</button>
                   ))}
                 </div>
                 <button className="nav-btn" onClick={()=>setReportModal(true)} title="Generar reporte"
-                  style={{fontSize:11,color:"#555",display:"flex",alignItems:"center",gap:4}}>
-                  <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect x=".5" y=".5" width="12" height="12" rx="2" stroke="#888"/><line x1="3" y1="4" x2="10" y2="4" stroke="#888" strokeWidth="1.2"/><line x1="3" y1="6.5" x2="10" y2="6.5" stroke="#888" strokeWidth="1.2"/><line x1="3" y1="9" x2="7" y2="9" stroke="#888" strokeWidth="1.2"/></svg>
+                  style={{fontSize:11,color:D.text2,display:"flex",alignItems:"center",gap:4}}>
+                  <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect x=".5" y=".5" width="12" height="12" rx="2" stroke={D.text2}/><line x1="3" y1="4" x2="10" y2="4" stroke={D.text2} strokeWidth="1.2"/><line x1="3" y1="6.5" x2="10" y2="6.5" stroke={D.text2} strokeWidth="1.2"/><line x1="3" y1="9" x2="7" y2="9" stroke={D.text2} strokeWidth="1.2"/></svg>
                   Reporte
                 </button>
               </div>
+              </>}
             </div>
 
             {view==="week"
@@ -646,7 +741,7 @@ export default function App() {
                   dragging={dragging} dragOver={dragOver}
                   setPicker={setPicker} removeW={removeW}
                   userHoursW={userHoursW} areaF={areaF} onUserClick={u=>setProfileUser(u)}
-                  assignW={assignW} startDrag={startDrag} dark={dark} D={D} />
+                  assignW={assignW} startDrag={startDrag} dark={dark} D={D} company={company} />
               : <MonthCal users={visible} shifts={shifts} schedule={schedule} monthRef={monthRef} dark={dark}
                   dragging={dragging} dragOver={dragOver} setDragOver={setDragOver}
                   setPicker={setPicker} dropM={dropM} removeM={removeM} setDragging={setDragging} />
@@ -656,7 +751,7 @@ export default function App() {
       )}
 
       {/* ── TAREAS ── */}
-      {tab==="tasks" && <TasksTab users={users} schedule={schedule} dark={dark} />}
+      {tab==="tasks" && <TasksTab users={users} schedule={schedule} dark={dark} company={company} pfx={pfx} />}
 
       {/* ── PERSONAS ── */}
       {tab==="users" && (
@@ -665,7 +760,7 @@ export default function App() {
             <div><div style={{fontSize:18,fontWeight:700}}>Personas</div><div style={{fontSize:13,color:"#888",marginTop:2}}>{[...FIXED_USERS,...extra].filter(u=>!hidden.includes(u.id)).length} personas</div></div>
             <button className="btn" onClick={()=>{ setEditUser(null); setUserModal(true); }} style={{background:"#111",color:"#fff",padding:"7px 14px",borderRadius:6,fontSize:13,fontWeight:500}}>+ Nueva persona</button>
           </div>
-          {["Cocina","Caja"].map(area=>{
+          {company.areas.map(area=>{
             const allInArea=[...FIXED_USERS,...extra].filter(u=>u.area===area);
             return (
               <div key={area} style={{marginBottom:28}}>
@@ -714,8 +809,10 @@ export default function App() {
               <div style={{width:8,height:8,borderRadius:"50%",background:s.color,flexShrink:0}}/>
               <div style={{flex:1}}><div style={{fontSize:14,fontWeight:500}}>{s.name}</div><div style={{fontSize:12,color:"#AAA"}}>{s.start} – {s.end} · {shiftH(s).toFixed(1)}h efectivas</div></div>
               <div style={{display:"flex",gap:6}}>
-                <button className="btn" onClick={()=>{ setEditShift(s); setShiftModal(true); }} style={{background:"#F5F5F5",color:"#333",padding:"5px 11px",borderRadius:5,fontSize:12}}>Editar</button>
-                <button className="btn" onClick={()=>setShifts(p=>p.filter(x=>x.id!==s.id))} style={{background:"#FBF0F0",color:"#9B2335",padding:"5px 11px",borderRadius:5,fontSize:12}}>Eliminar</button>
+                <button className="btn" onClick={()=>{ setEditShift(s); setShiftModal(true); }} style={{background:D.bg3,color:D.text,padding:"5px 11px",borderRadius:5,fontSize:12}}>Editar</button>
+                <button className="btn" title="Eliminar turno" onClick={()=>{ if(window.confirm(`¿Eliminar turno "${s.name}"?`)) setShifts(p=>p.filter(x=>x.id!==s.id)); }} style={{background:"none",border:`1px solid ${D.border}`,color:"#9B2335",padding:"5px 8px",borderRadius:5,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M1.5 3h9M4.5 3V2h3v1M5 5.5v3M7 5.5v3M2.5 3l.5 7h6l.5-7" stroke="#9B2335" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                </button>
               </div>
             </div>
           ))}
@@ -738,7 +835,7 @@ export default function App() {
         onApplyMonth={(tpl,y,m)=>applyTemplateMonth(tpl,y,m)}
         onClose={()=>setTemplateModal(false)} />}}
 
-      {profileUser && <ProfileModal user={profileUser} users={users} shifts={shifts} schedule={schedule} dark={dark}
+      {profileUser && <ProfileModal user={profileUser} users={users} shifts={shifts} schedule={schedule} dark={dark} company={company} pfx={pfx}
         onClose={()=>setProfileUser(null)} onEdit={u=>{ setEditUser(u); setUserModal(true); setProfileUser(null); }} />}
 
       {userModal && <UserModal initial={editUser} dark={dark} isFixed={editUser?FIXED_USERS.some(f=>f.id===editUser.id):false}
@@ -787,11 +884,11 @@ export default function App() {
 }
 
 // ─── WEEK GRID ────────────────────────────────────────────────────────────────
-function WeekGrid({ users, shifts, dates, wSched, dragging, dragOver, setPicker, removeW, userHoursW, areaF, onUserClick, assignW, startDrag, dark, D }) {
+function WeekGrid({ users, shifts, dates, wSched, dragging, dragOver, setPicker, removeW, userHoursW, areaF, onUserClick, assignW, startDrag, dark, D, company }) {
   const today=new Date(); today.setHours(0,0,0,0);
   const showSep=areaF==="Todas";
   const rows=[];
-  if(showSep){ ["Cocina","Caja"].forEach(area=>{ const au=users.filter(u=>u.area===area); if(!au.length) return; rows.push({sep:true,label:area}); au.forEach(u=>rows.push({sep:false,u})); }); }
+  if(showSep){ (company?.areas||["Cocina","Caja"]).forEach(area=>{ const au=users.filter(u=>u.area===area); if(!au.length) return; rows.push({sep:true,label:area}); au.forEach(u=>rows.push({sep:false,u})); }); }
   else users.forEach(u=>rows.push({sep:false,u}));
 
   // Fill handle — supports horizontal (same user, multiple days) AND vertical (same day, multiple users)
@@ -1028,34 +1125,35 @@ function getPlanchaForDay(dateObj){
   return PLANCHA_USERS[planchaIdx];
 }
 
-function TasksTab({ users, schedule, dark }) {
+function TasksTab({ users, schedule, dark, company, pfx }) {
   const D = getD(dark);
   const [wo, setWo] = useState(0);
-  const [rotNames, setRotNames] = useState(()=>JSON.parse(localStorage.getItem("so_rot_names")||JSON.stringify(ROTATING_TASKS)));
-  const [fixNames, setFixNames] = useState(()=>JSON.parse(localStorage.getItem("so_fix_names")||JSON.stringify(FIXED_TASKS)));
-  const [colacion, setColacion] = useState(()=>JSON.parse(localStorage.getItem("so_colacion")||"{}"));
-  const [planchaOverride, setPlanchaOverride] = useState(()=>JSON.parse(localStorage.getItem("so_plancha")||"{}"));
+  const [rotNames, setRotNames] = useState(()=>JSON.parse(localStorage.getItem(pfx+"rot_names")||JSON.stringify(company.rotatingTasks)));
+  const [fixNames, setFixNames] = useState(()=>JSON.parse(localStorage.getItem(pfx+"fix_names")||JSON.stringify(company.fixedTasks)));
+  const [colacion, setColacion] = useState(()=>JSON.parse(localStorage.getItem(pfx+"colacion")||"{}"));
+  const [planchaOverride, setPlanchaOverride] = useState(()=>JSON.parse(localStorage.getItem(pfx+"plancha")||"{}"));
   const [editingRot, setEditingRot] = useState(null);
   const [editingFix, setEditingFix] = useState(null);
   const [editVal,    setEditVal]    = useState("");
 
-  useEffect(()=>{ localStorage.setItem("so_rot_names",JSON.stringify(rotNames)); },[rotNames]);
-  useEffect(()=>{ localStorage.setItem("so_fix_names",JSON.stringify(fixNames)); },[fixNames]);
-  useEffect(()=>{ localStorage.setItem("so_colacion", JSON.stringify(colacion));  },[colacion]);
-  useEffect(()=>{ localStorage.setItem("so_plancha",  JSON.stringify(planchaOverride)); },[planchaOverride]);
+  useEffect(()=>{ localStorage.setItem(pfx+"rot_names",JSON.stringify(rotNames)); },[rotNames,pfx]);
+  useEffect(()=>{ localStorage.setItem(pfx+"fix_names",JSON.stringify(fixNames)); },[fixNames,pfx]);
+  useEffect(()=>{ localStorage.setItem(pfx+"colacion", JSON.stringify(colacion));  },[colacion,pfx]);
+  useEffect(()=>{ localStorage.setItem(pfx+"plancha",  JSON.stringify(planchaOverride)); },[planchaOverride,pfx]);
 
-  const kitchenUsers = ROTATION_USER_ORDER.map(id=>users.find(u=>u.id===id)).filter(Boolean);
-  const planchaUsers = kitchenUsers.filter(u=>u.id!==MIRIAM_ID);
+  const rotOrder = company.rotationOrder;
+  const kitchenUsers = rotOrder.map(id=>users.find(u=>u.id===id)).filter(Boolean);
+  const planchaUsers = company.hasPlancha ? kitchenUsers.filter(u=>u.id!==company.planchaExclude) : [];
   const dates = weekDates(wo);
 
   function getRotAssignment(wo){
     const n=rotNames.length; const result={};
-    ROTATION_USER_ORDER.forEach((uid,ui)=>{ result[uid]=rotNames[((ANCHOR_TASK_OFFSET+ui+wo)%n+n)%n]; });
+    rotOrder.forEach((uid,ui)=>{ result[uid]=rotNames[((company.anchorTaskOffset+ui+wo)%n+n)%n]; });
     return result;
   }
   function getFixAssignment(wo){
     const result={};
-    ROTATION_USER_ORDER.forEach((uid,ui)=>{ result[uid]=fixNames[ui % fixNames.length]; });
+    rotOrder.forEach((uid,ui)=>{ result[uid]=fixNames[ui % (fixNames.length||1)]; });
     return result;
   }
 
@@ -1093,6 +1191,7 @@ function TasksTab({ users, schedule, dark }) {
       </div>
 
       {/* ── PLANCHA ── */}
+      {company.hasPlancha && (<>
       <SectionTitle>Plancha</SectionTitle>
       <div style={{border:`1px solid ${D.border}`,borderRadius:10,overflow:"hidden",marginBottom:4}}>
         <table style={{width:"100%",borderCollapse:"collapse"}}>
@@ -1127,6 +1226,7 @@ function TasksTab({ users, schedule, dark }) {
         </table>
       </div>
       <div style={{fontSize:10,color:D.text3,marginBottom:28,paddingLeft:2}}>Miriam no hace plancha. Rotación automática día por medio. Puedes editar cualquier día manualmente.</div>
+      </>)}
 
       {/* ── COLACIÓN ── */}
       <SectionTitle>Colación de cocina</SectionTitle>
@@ -1212,6 +1312,7 @@ function TasksTab({ users, schedule, dark }) {
       <div style={{fontSize:10,color:D.text3,marginBottom:28,paddingLeft:2}}>Doble clic en el nombre de la tarea para renombrarla.</div>
 
       {/* ── FIJAS ── */}
+      {fixNames.length>0 && (<>
       <SectionTitle>Tareas fijas</SectionTitle>
       <div style={{border:`1px solid ${D.border}`,borderRadius:10,overflow:"hidden",marginBottom:6}}>
         <table style={{width:"100%",borderCollapse:"collapse"}}>
@@ -1242,22 +1343,38 @@ function TasksTab({ users, schedule, dark }) {
         </table>
       </div>
       <div style={{fontSize:10,color:D.text3,paddingLeft:2}}>Doble clic en el nombre de la tarea para renombrarla.</div>
+      </>)}
     </div>
   );
 }
 
 // ─── PROFILE MODAL ────────────────────────────────────────────────────────────
-function ProfileModal({ user, users, shifts, schedule, dark, onClose, onEdit }) {
+function ProfileModal({ user, users, shifts, schedule, dark, company, pfx, onClose, onEdit }) {
   const D = getD(dark);
   const [wo, setWo] = useState(0);
   const printRef = useRef();
   const wk = wKey(wo);
   const wSched = schedule[wk]||{};
   const dates = weekDates(wo);
-  const rotating = getRotatingAssignment(wo);
-  const fixed    = getFixedAssignment(wo);
-  const rotTask = user.area==="Cocina" ? rotating[user.id] : null;
-  const fixTask = user.area==="Cocina" ? fixed[user.id] : null;
+
+  // Compute task assignments using company config
+  const rotOrder = company?.rotationOrder||[];
+  const rotNames = JSON.parse(localStorage.getItem((pfx||"so_")+"rot_names")||JSON.stringify(company?.rotatingTasks||[]));
+  const fixNames = JSON.parse(localStorage.getItem((pfx||"so_")+"fix_names")||JSON.stringify(company?.fixedTasks||[]));
+  const isKitchen = user.area === (company?.kitchenArea||"Cocina");
+
+  function getRotTask(uid){
+    const ui=rotOrder.indexOf(uid); if(ui<0) return null;
+    const n=rotNames.length; if(!n) return null;
+    return rotNames[((( company?.anchorTaskOffset||0)+ui+wo)%n+n)%n];
+  }
+  function getFixTask(uid){
+    const ui=rotOrder.indexOf(uid); if(ui<0||!fixNames.length) return null;
+    return fixNames[ui % fixNames.length];
+  }
+
+  const rotTask = isKitchen ? getRotTask(user.id) : null;
+  const fixTask = isKitchen ? getFixTask(user.id) : null;
 
   let totalH=0;
   const dayRows=DAYS.map((day,di)=>{
@@ -1270,8 +1387,8 @@ function ProfileModal({ user, users, shifts, schedule, dark, onClose, onEdit }) 
     return {day, date:dates[di], label, timeLabel};
   });
 
-  // Colación — check if this user is assigned colación any day this week
-  const colacionStorage = JSON.parse(localStorage.getItem("so_colacion")||"{}");
+  // Colación
+  const colacionStorage = JSON.parse(localStorage.getItem((pfx||"so_")+"colacion")||"{}");
   const colacionDays = dates.filter(d=>{
     const key=`col-${d?.toDateString()}`;
     return colacionStorage[key]===user.id;
