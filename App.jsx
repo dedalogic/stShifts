@@ -33,10 +33,10 @@ const DEFAULT_SHIFTS = [
 ];
 
 const SPECIAL = {
-  LIBRE:   { id:"__libre__",   label:"Libre",        sym:"",   bg:"#F7F7F7", border:"#E0E0E0", color:"#888",   exportAs:null },
+  LIBRE:   { id:"__libre__",   label:"Libre",        sym:"",   bg:"#F0FAF4", border:"#A8DDB8", color:"#2D7A4A", exportAs:null },
   FALTA:   { id:"__falta__",   label:"Falta",        sym:"",   bg:"#FDF2F2", border:"#F0C0C0", color:"#9B2335", exportAs:"Falta" },
   VENDIDO: { id:"__vendido__", label:"Turno vendido",sym:"",   bg:"#FDFAF0", border:"#E8D88A", color:"#7A5C00", exportAs:"Turno vendido" },
-  DOBLE:   { id:"__doble__",   label:"Doble turno",  sym:"×2", bg:"#F3F0FA", border:"#C9BEE8", color:"#4A3580", exportAs:null, hidden:true },
+  DOBLE:   { id:"__doble__",   label:"Doble turno",  sym:"",   bg:"#F3F0FA", border:"#C9BEE8", color:"#4A3580", exportAs:null, hidden:true },
 };
 
 const RULES = { MAX_CONSECUTIVE:6, BREAK_MIN:30, MAX_DAY_H:10, WEEK_H:44 };
@@ -141,6 +141,30 @@ function cellByDate(sched,date,uid) {
   return (sched[wk]||{})[`${dn}-${uid}`];
 }
 
+// ─── THEME ────────────────────────────────────────────────────────────────────
+function getD(dark){ return dark ? {
+  bg:"#141414", bg2:"#1C1C1C", bg3:"#242424", bg4:"#2A2A2A",
+  border:"#2E2E2E", border2:"#383838",
+  text:"#EDEDEB", text2:"#888", text3:"#444",
+  nav:"#111", navBorder:"#252525",
+  cell:"#1A1A1A", cellHover:"#202020",
+  tableHead:"#181818", tableRow:"#141414", tableAlt:"#181818",
+  input:"#1C1C1C", inputBorder:"#333",
+  btnBg:"#222", btnBorder:"#333",
+  tabActive:"#EDEDEB", tabActiveText:"#111",
+  scrollThumb:"#333",
+} : {
+  bg:"#fff", bg2:"#FAFAFA", bg3:"#F5F5F5", bg4:"#F0F0F0",
+  border:"#EBEBEB", border2:"#E0E0E0",
+  text:"#111", text2:"#888", text3:"#CCC",
+  nav:"#fff", navBorder:"#EBEBEB",
+  cell:"#fff", cellHover:"#F8F8F8",
+  tableHead:"#FAFAFA", tableRow:"#fff", tableAlt:"#FAFAFA",
+  input:"#fff", inputBorder:"#E5E7EB",
+  btnBg:"#F5F5F5", btnBorder:"#E8E8E8",
+  tabActive:"#111", tabActiveText:"#fff",
+  scrollThumb:"#E0E0E0",
+}; }
 function loadExtra() { const r=localStorage.getItem("so_extra"); return r?JSON.parse(r):[]; }
 function loadShifts() { const r=localStorage.getItem("so_shifts"); return r?JSON.parse(r):DEFAULT_SHIFTS; }
 function loadSchedule() { const r=localStorage.getItem("so_schedule"); return r?JSON.parse(r):{}; }
@@ -194,12 +218,13 @@ export default function App() {
   const [profileUser, setProfileUser] = useState(null);
   const [collapsed,setCollapsed]= useState({turnos:false,estados:false,alertas:false});
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [copied,   setCopied]   = useState(null);
   const [reportModal, setReportModal] = useState(false);
   const [templateModal, setTemplateModal] = useState(false);
   const [templates, setTemplates] = useState(()=>JSON.parse(localStorage.getItem("so_templates")||"[]"));
   const [dark,     setDark]     = useState(()=>localStorage.getItem("so_dark")==="1");
   const [monthRef, setMonthRef] = useState(()=>{ const n=new Date(); return{y:n.getFullYear(),m:n.getMonth()}; });
+
+  const setCell_ref=useRef(null);
 
   // ── pointer-drag ghost tracking ──
   useEffect(()=>{
@@ -207,14 +232,12 @@ export default function App() {
     const onMove=e=>{
       const p=e.touches?e.touches[0]:e;
       setGhostPos({x:p.clientX,y:p.clientY});
-      // detect which cell is under cursor
       const el=document.elementFromPoint(p.clientX,p.clientY);
       const cell=el?.closest("[data-cellkey]");
       setDragOver(cell?cell.getAttribute("data-cellkey"):null);
     };
     const onUp=e=>{
       document.body.classList.remove("is-dragging");
-      // final drop
       const p=e.touches?e.changedTouches[0]:e;
       const el=document.elementFromPoint(p.clientX,p.clientY);
       const cell=el?.closest("[data-cellkey]");
@@ -231,7 +254,6 @@ export default function App() {
     return()=>{ window.removeEventListener("pointermove",onMove); window.removeEventListener("pointerup",onUp); };
   },[dragging]);
 
-  const setCell_ref=useRef(null);
   setCell_ref.current=(day,uid,val)=>assignW(day,uid,val);
 
   const users = [...FIXED_USERS, ...extra];
@@ -380,29 +402,7 @@ export default function App() {
   const errN=alerts.filter(a=>a.type==="error").length;
   const warnN=alerts.filter(a=>a.type==="warn").length;
 
-  const D = dark ? {
-    bg:"#141414", bg2:"#1C1C1C", bg3:"#242424", bg4:"#2A2A2A",
-    border:"#2E2E2E", border2:"#383838",
-    text:"#EDEDEB", text2:"#999", text3:"#555",
-    nav:"#111", navBorder:"#252525",
-    cell:"#1A1A1A", cellHover:"#202020",
-    tableHead:"#181818", tableRow:"#141414", tableAlt:"#181818",
-    input:"#1C1C1C", inputBorder:"#333",
-    btnBg:"#222", btnBorder:"#333",
-    tabActive:"#EDEDEB", tabActiveText:"#111",
-    scrollThumb:"#333",
-  } : {
-    bg:"#fff", bg2:"#FAFAFA", bg3:"#F5F5F5", bg4:"#F0F0F0",
-    border:"#EBEBEB", border2:"#E0E0E0",
-    text:"#111", text2:"#888", text3:"#CCC",
-    nav:"#fff", navBorder:"#EBEBEB",
-    cell:"#fff", cellHover:"#F8F8F8",
-    tableHead:"#FAFAFA", tableRow:"#fff", tableAlt:"#FAFAFA",
-    input:"#fff", inputBorder:"#E5E7EB",
-    btnBg:"#F5F5F5", btnBorder:"#E8E8E8",
-    tabActive:"#111", tabActiveText:"#fff",
-    scrollThumb:"#E0E0E0",
-  };
+  const D = getD(dark);
 
   return (
     <div style={{fontFamily:"'Inter',sans-serif",background:D.bg,minHeight:"100vh",color:D.text,colorScheme:dark?"dark":"light"}}>
@@ -435,7 +435,7 @@ export default function App() {
         .nav-btn:active{transform:scale(.97);}
         .wcell{transition:background .12s;cursor:pointer;position:relative;}
         .wcell:hover{background:${D.cellHover}!important;}
-        .drag-ov{background:${dark?"#1a2540":"#EEF4FF"}!important;box-shadow:inset 0 0 0 2px #4B6CB7!important;}
+        .drag-ov{background:${dark?"#222":"#F8F8F8"}!important;}
         .wrow td{transition:background .1s;}
         .wrow:hover td{background:${D.cellHover};}
         .wrow:hover td:first-child{background:${D.cellHover}!important;}
@@ -462,8 +462,10 @@ export default function App() {
         .no-select{user-select:none!important;-webkit-user-select:none!important;-moz-user-select:none!important;}
         body.is-dragging{user-select:none!important;-webkit-user-select:none!important;cursor:grabbing!important;}
         body.is-dragging *{user-select:none!important;-webkit-user-select:none!important;}
-        .cell-drop-hint{position:absolute;inset:3px;border-radius:6px;border:2px dashed #4B6CB7;background:${dark?"#1a2540":"#EEF4FF"};opacity:0;transition:opacity .12s;pointer-events:none;}
+        .cell-drop-hint{position:absolute;inset:3px;border-radius:6px;border:1.5px dashed ${dark?"#555":"#CCC"};opacity:0;transition:opacity .12s;pointer-events:none;}
         .drag-ov .cell-drop-hint{opacity:1;}
+        .wrow:hover .fill-handle{opacity:1!important;cursor:crosshair;}
+        .wrow:hover .cell-plus{opacity:1!important;}
       `}</style>
 
       {/* ── NAV ── */}
@@ -550,8 +552,8 @@ export default function App() {
                   className="sb-row no-select">
                   <div style={{width:8,height:8,borderRadius:"50%",background:s.color,flexShrink:0,marginTop:2}}/>
                   <div>
-                    <div style={{fontSize:11,fontWeight:500,color:"#222",lineHeight:1.3}}>{s.name}</div>
-                    <div style={{fontSize:10,color:"#AAA",marginTop:1}}>{s.start}–{s.end}</div>
+                    <div style={{fontSize:11,fontWeight:500,color:D.text,lineHeight:1.3}}>{s.name}</div>
+                    <div style={{fontSize:10,color:D.text2,marginTop:1}}>{s.start}–{s.end}</div>
                   </div>
                 </div>
               ))}
@@ -569,8 +571,8 @@ export default function App() {
                   className="sb-row no-select">
                   <div style={{width:8,height:8,borderRadius:"50%",background:st.color,flexShrink:0,marginTop:2}}/>
                   <div style={{flex:1}}>
-                    <div style={{fontSize:11,fontWeight:500,color:"#222",lineHeight:1.3}}>{st.label}</div>
-                    <div style={{fontSize:10,color:"#AAA",marginTop:1}}>{st.sym}{st.hidden?" · interno":""}</div>
+                    <div style={{fontSize:11,fontWeight:500,color:D.text,lineHeight:1.3}}>{st.label}</div>
+                    <div style={{fontSize:10,color:D.text2,marginTop:1}}></div>
                   </div>
                 </div>
               ))}
@@ -586,7 +588,7 @@ export default function App() {
                 {!collapsed.alertas && alerts.slice(0,8).map((a,i)=>(
                   <div key={i} className="sb-row" style={{cursor:"default",alignItems:"flex-start"}}>
                     <div style={{width:5,height:5,borderRadius:"50%",background:a.type==="error"?"#9B2335":"#C8A000",flexShrink:0,marginTop:3}}/>
-                    <div style={{fontSize:11,fontWeight:400,color:"#333",lineHeight:1.4}}>{a.msg}</div>
+                    <div style={{fontSize:11,fontWeight:400,color:D.text,lineHeight:1.4}}>{a.msg}</div>
                   </div>
                 ))}
               </div>
@@ -602,13 +604,13 @@ export default function App() {
               </div>
               {view==="week" && <>
                 <button className="nav-btn" onClick={()=>setWo(w=>w-1)}>‹</button>
-                <span style={{fontSize:13,fontWeight:500,color:"#333",minWidth:158,textAlign:"center"}}>{weekLabel(wo)}</span>
+                <span style={{fontSize:13,fontWeight:500,color:D.text,minWidth:158,textAlign:"center"}}>{weekLabel(wo)}</span>
                 <button className="nav-btn" onClick={()=>setWo(w=>w+1)}>›</button>
                 <button className="nav-btn" onClick={()=>setWo(0)} style={{fontSize:11,color:"#999",background:wo===0?"#F0F0F0":"none"}}>Hoy</button>
               </>}
               {view==="month" && <>
                 <button className="nav-btn" onClick={()=>setMonthRef(m=>{ const d=new Date(m.y,m.m-1,1); return{y:d.getFullYear(),m:d.getMonth()}; })}>‹</button>
-                <span style={{fontSize:13,fontWeight:500,color:"#333",minWidth:130,textAlign:"center"}}>{MONTH_NAMES[monthRef.m]} {monthRef.y}</span>
+                <span style={{fontSize:13,fontWeight:500,color:D.text,minWidth:130,textAlign:"center"}}>{MONTH_NAMES[monthRef.m]} {monthRef.y}</span>
                 <button className="nav-btn" onClick={()=>setMonthRef(m=>{ const d=new Date(m.y,m.m+1,1); return{y:d.getFullYear(),m:d.getMonth()}; })}>›</button>
                 <button className="nav-btn" onClick={()=>{ const n=new Date(); setMonthRef({y:n.getFullYear(),m:n.getMonth()}); }} style={{fontSize:11,color:"#999",background:(()=>{const n=new Date();return monthRef.m===n.getMonth()&&monthRef.y===n.getFullYear()?"#F0F0F0":"none";})()}}>Hoy</button>
               </>}
@@ -631,9 +633,8 @@ export default function App() {
                   dragging={dragging} dragOver={dragOver}
                   setPicker={setPicker} removeW={removeW}
                   userHoursW={userHoursW} areaF={areaF} onUserClick={u=>setProfileUser(u)}
-                  copied={copied} setCopied={setCopied} assignW={assignW}
-                  startDrag={startDrag} dark={dark} D={D} />
-              : <MonthCal users={visible} shifts={shifts} schedule={schedule} monthRef={monthRef}
+                  assignW={assignW} startDrag={startDrag} dark={dark} D={D} />
+              : <MonthCal users={visible} shifts={shifts} schedule={schedule} monthRef={monthRef} dark={dark}
                   dragging={dragging} dragOver={dragOver} setDragOver={setDragOver}
                   setPicker={setPicker} dropM={dropM} removeM={removeM} setDragging={setDragging} />
             }
@@ -642,7 +643,7 @@ export default function App() {
       )}
 
       {/* ── TAREAS ── */}
-      {tab==="tasks" && <TasksTab users={users} schedule={schedule} />}
+      {tab==="tasks" && <TasksTab users={users} schedule={schedule} dark={dark} />}
 
       {/* ── PERSONAS ── */}
       {tab==="users" && (
@@ -690,11 +691,11 @@ export default function App() {
       )}
 
       {/* Modals */}
-      {picker && <PickerModal context={picker} users={users} shifts={shifts}
+      {picker && <PickerModal context={picker} users={users} shifts={shifts} dark={dark}
         onPick={val=>{ if(picker.date) assignM(picker.date,picker.uid,val); else assignW(picker.day,picker.uid,val); setPicker(null); }}
         onClose={()=>setPicker(null)} />}
 
-      {reportModal && <ReportModal users={users} shifts={shifts} schedule={schedule} wo={wo} monthRef={monthRef} onClose={()=>setReportModal(false)} />}
+      {reportModal && <ReportModal users={users} shifts={shifts} schedule={schedule} wo={wo} monthRef={monthRef} dark={dark} onClose={()=>setReportModal(false)} />}
 
       {templateModal && <TemplateModal
         templates={templates} setTemplates={setTemplates}
@@ -705,10 +706,10 @@ export default function App() {
         onApplyMonth={(tpl,y,m)=>applyTemplateMonth(tpl,y,m)}
         onClose={()=>setTemplateModal(false)} />}}
 
-      {profileUser && <ProfileModal user={profileUser} users={users} shifts={shifts} schedule={schedule}
+      {profileUser && <ProfileModal user={profileUser} users={users} shifts={shifts} schedule={schedule} dark={dark}
         onClose={()=>setProfileUser(null)} onEdit={u=>{ setEditUser(u); setUserModal(true); setProfileUser(null); }} />}
 
-      {userModal && <UserModal initial={editUser} isFixed={editUser?FIXED_USERS.some(f=>f.id===editUser.id):false}
+      {userModal && <UserModal initial={editUser} dark={dark} isFixed={editUser?FIXED_USERS.some(f=>f.id===editUser.id):false}
         onSave={u=>{
           if(editUser){ if(FIXED_USERS.some(f=>f.id===editUser.id)){ setExtra(p=>{ const ex=p.find(x=>x.id===editUser.id); return ex?p.map(x=>x.id===editUser.id?{...x,...u}:x):[...p,{...editUser,...u}]; }); } else setExtra(p=>p.map(x=>x.id===editUser.id?{...x,...u}:x)); }
           else setExtra(p=>[...p,{...u,id:`ux${Date.now()}`}]);
@@ -716,7 +717,7 @@ export default function App() {
         }}
         onClose={()=>{ setUserModal(false); setEditUser(null); }} />}
 
-      {shiftModal && <ShiftModal initial={editShift}
+      {shiftModal && <ShiftModal initial={editShift} dark={dark}
         onSave={s=>{ if(editShift) setShifts(p=>p.map(x=>x.id===editShift.id?{...x,...s}:x)); else setShifts(p=>[...p,{...s,id:`sx${Date.now()}`}]); setShiftModal(false); setEditShift(null); }}
         onClose={()=>{ setShiftModal(false); setEditShift(null); }} />}
 
@@ -727,22 +728,68 @@ export default function App() {
 }
 
 // ─── WEEK GRID ────────────────────────────────────────────────────────────────
-function WeekGrid({ users, shifts, dates, wSched, dragging, dragOver, setPicker, removeW, userHoursW, areaF, onUserClick, copied, setCopied, assignW, startDrag, dark, D }) {
+function WeekGrid({ users, shifts, dates, wSched, dragging, dragOver, setPicker, removeW, userHoursW, areaF, onUserClick, assignW, startDrag, dark, D }) {
   const today=new Date(); today.setHours(0,0,0,0);
   const showSep=areaF==="Todas";
   const rows=[];
   if(showSep){ ["Cocina","Caja"].forEach(area=>{ const au=users.filter(u=>u.area===area); if(!au.length) return; rows.push({sep:true,label:area}); au.forEach(u=>rows.push({sep:false,u})); }); }
   else users.forEach(u=>rows.push({sep:false,u}));
 
+  // Fill handle — supports horizontal (same user, multiple days) AND vertical (same day, multiple users)
+  const [filling, setFilling] = useState(null);
+  const fillRef = useRef(null);
+
+  function startFill(e, uid, day, val) {
+    e.preventDefault(); e.stopPropagation();
+    const fromDayIdx = DAYS.indexOf(day);
+    const fromRowUid = uid;
+    fillRef.current = { uid, val, fromDayIdx, toDayIdx: fromDayIdx, fromRowUid, toRowUid: uid };
+    setFilling({ ...fillRef.current });
+    document.body.classList.add("is-dragging");
+    const onMove = e2 => {
+      const el = document.elementFromPoint(e2.clientX, e2.clientY);
+      const cell = el?.closest("[data-fillkey]");
+      if (cell) {
+        const toDayIdx = parseInt(cell.getAttribute("data-fillidx"));
+        const toRowUid = cell.getAttribute("data-filluid");
+        // Determine direction: if moved more horizontally stay horizontal, else vertical
+        const sameDayMove = toDayIdx !== fromDayIdx;
+        const sameRowMove = toRowUid !== fromRowUid;
+        if (sameDayMove && !sameRowMove) {
+          // horizontal fill
+          fillRef.current = { ...fillRef.current, toDayIdx, toRowUid: uid };
+        } else if (sameRowMove && !sameDayMove) {
+          // vertical fill — same day, different users
+          fillRef.current = { ...fillRef.current, toDayIdx: fromDayIdx, toRowUid };
+        } else if (sameDayMove || sameRowMove) {
+          fillRef.current = { ...fillRef.current, toDayIdx, toRowUid };
+        }
+        setFilling({ ...fillRef.current });
+      }
+    };
+    const onUp = () => {
+      document.body.classList.remove("is-dragging");
+      const { uid: u, val: v, fromDayIdx: fd, toDayIdx: td, fromRowUid: fr, toRowUid: tr } = fillRef.current;
+      // Get all user ids in range (for vertical)
+      const allUids = rows.filter(r=>!r.sep).map(r=>r.u.id);
+      const frIdx = allUids.indexOf(fr), trIdx = allUids.indexOf(tr);
+      const loU = Math.min(frIdx, trIdx), hiU = Math.max(frIdx, trIdx);
+      const loD = Math.min(fd, td), hiD = Math.max(fd, td);
+      for (let ui = loU; ui <= hiU; ui++) {
+        for (let di = loD; di <= hiD; di++) {
+          assignW(DAYS[di], allUids[ui], v);
+        }
+      }
+      setFilling(null); fillRef.current = null;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
   return (
-    <div style={{overflowX:"auto",overflowY:"auto",flex:1,cursor:dragging?"grabbing":"default"}} className={dragging?"no-select":""}>
-      {copied && (
-        <div style={{padding:"6px 16px",background:"#FFFBF0",borderBottom:"1px solid #FDE68A",fontSize:12,color:"#92400E",display:"flex",alignItems:"center",gap:8}}>
-          <span style={{fontWeight:500}}>Turno copiado.</span>
-          <span style={{color:"#B45309"}}>Clic en cualquier celda para pegar.</span>
-          <button className="btn" onClick={()=>setCopied(null)} style={{marginLeft:"auto",fontSize:11,color:"#92400E",background:"none",textDecoration:"underline",padding:0}}>cancelar</button>
-        </div>
-      )}
+    <div style={{overflowX:"auto",overflowY:"auto",flex:1}} className={dragging||filling?"no-select":""}>
       <table style={{borderCollapse:"collapse",width:"100%",minWidth:760}}>
         <thead>
           <tr style={{background:D.tableHead}}>
@@ -776,20 +823,34 @@ function WeekGrid({ users, shifts, dates, wSched, dragging, dragOver, setPicker,
                   </div>
                 </div>
               </td>
-              {DAYS.map((day)=>{
+              {DAYS.map((day,di)=>{
                 const ck=`${day}||${u.id}`, isOver=dragOver===ck, val=wSched[`${day}-${u.id}`];
-                const isPasting=!!copied;
+                const allUids = rows.filter(r=>!r.sep).map(r=>r.u.id);
+                const myRowIdx = allUids.indexOf(u.id);
+                const isFillHighlight = filling && (() => {
+                  const loD=Math.min(filling.fromDayIdx,filling.toDayIdx), hiD=Math.max(filling.fromDayIdx,filling.toDayIdx);
+                  const frIdx=allUids.indexOf(filling.fromRowUid), trIdx=allUids.indexOf(filling.toRowUid);
+                  const loU=Math.min(frIdx,trIdx), hiU=Math.max(frIdx,trIdx);
+                  return di>=loD && di<=hiD && myRowIdx>=loU && myRowIdx<=hiU;
+                })();
                 return <td key={day} className={`wcell ${isOver?"drag-ov":""}`}
                   data-cellkey={`${day}||${u.id}`}
-                  onClick={()=>{ if(!dragging){ if(isPasting){ assignW(day,u.id,copied.val); setCopied(null); } else if(!val) setPicker({day,uid:u.id}); } }}
-                  onContextMenu={e=>{ e.preventDefault(); if(val&&!isSpec(val)) setCopied({val}); }}
-                  style={{padding:"4px 4px",borderRadius:isOver?6:0,borderLeft:`1px solid ${D.border}`,cursor:isPasting?"copy":dragging?"crosshair":"pointer",background:D.cell}}>
+                  data-fillkey="1" data-filluid={u.id} data-fillidx={di}
+                  onClick={()=>{ if(!dragging && !filling && !val) setPicker({day,uid:u.id}); }}
+                  style={{padding:"4px 4px",borderRadius:isOver?6:0,borderLeft:`1px solid ${D.border}`,cursor:"pointer",background:isFillHighlight?(dark?"#252525":"#F5F5F5"):D.cell}}>
                   <div style={{position:"relative",minHeight:38}} className={val?"cell-filled":""}>
                     {isOver && <div className="cell-drop-hint"/>}
                     <CellTag val={val} shifts={shifts} dark={dark}/>
+                    {val && !isSpec(val) && (
+                      <div
+                        onPointerDown={e=>startFill(e, u.id, day, val)}
+                        style={{position:"absolute",bottom:2,right:2,width:14,height:10,cursor:"crosshair",zIndex:4,background:"transparent"}}
+                        className="fill-handle"
+                      />
+                    )}
                     {val && <button className="btn rm" onPointerDown={e=>e.stopPropagation()} onClick={e=>{ e.stopPropagation(); removeW(day,u.id); }}
-                      style={{position:"absolute",top:2,right:2,background:dark?"rgba(30,30,30,.95)":"rgba(255,255,255,.96)",color:D.text2,fontSize:10,lineHeight:1,padding:"2px 4px",borderRadius:4,border:`1px solid ${D.border}`,opacity:0,zIndex:3}}>×</button>}
-                    {!val && <div style={{height:38,display:"flex",alignItems:"center",justifyContent:"center",color:isPasting?"#B45309":D.border2,fontSize:isOver?18:14,transition:"all .12s"}}>{isPasting?"↓":isOver?"+":" "}</div>}
+                      style={{position:"absolute",top:2,right:2,background:dark?"rgba(30,30,30,.95)":"rgba(255,255,255,.96)",color:D.text2,fontSize:10,lineHeight:1,padding:"2px 4px",borderRadius:4,border:`1px solid ${D.border}`,opacity:0,zIndex:5}}>×</button>}
+                    {!val && <div className="cell-plus" style={{height:38,display:"flex",alignItems:"center",justifyContent:"center",color:D.text3,fontSize:6,opacity:0,transition:"opacity .1s"}}>{isOver?"↓":"+"}</div>}
                   </div>
                 </td>;
               })}
@@ -803,7 +864,8 @@ function WeekGrid({ users, shifts, dates, wSched, dragging, dragOver, setPicker,
 }
 
 // ─── MONTH CALENDAR (Google Calendar style) ───────────────────────────────────
-function MonthCal({ users, shifts, schedule, monthRef, dragging, dragOver, setDragOver, setPicker, dropM, removeM, setDragging }) {
+function MonthCal({ users, shifts, schedule, monthRef, dark, dragging, dragOver, setDragOver, setPicker, dropM, removeM, setDragging }) {
+  const D=getD(dark);
   const {y,m}=monthRef;
   const today=new Date(); today.setHours(0,0,0,0);
   const first=new Date(y,m,1);
@@ -815,17 +877,16 @@ function MonthCal({ users, shifts, schedule, monthRef, dragging, dragOver, setDr
   for(let i=0;i<cells.length;i+=7) weeks.push(cells.slice(i,i+7));
 
   return (
-    <div style={{flex:1,overflowY:"auto"}}>
-      {/* Day headers */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",borderBottom:"1px solid #EBEBEB",background:"#FAFAFA",position:"sticky",top:0,zIndex:3}}>
+    <div style={{flex:1,overflowY:"auto",background:D.bg}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",borderBottom:`1px solid ${D.border}`,background:D.bg2,position:"sticky",top:0,zIndex:3}}>
         {DAY_SHORT.map((d,i)=>(
-          <div key={d} style={{padding:"7px 0",textAlign:"center",fontSize:11,fontWeight:600,color:i===6?"#CCC":"#444"}}>{d}</div>
+          <div key={d} style={{padding:"7px 0",textAlign:"center",fontSize:11,fontWeight:600,color:i===6?D.text3:D.text2}}>{d}</div>
         ))}
       </div>
       {weeks.map((week,wi)=>(
-        <div key={wi} style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",borderBottom:"1px solid #F0F0F0"}}>
+        <div key={wi} style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",borderBottom:`1px solid ${D.border}`}}>
           {week.map((date,di)=>{
-            if(!date) return <div key={di} style={{minHeight:90,background:"#FAFAFA",borderRight:di<6?"1px solid #F0F0F0":"none"}}/>;
+            if(!date) return <div key={di} style={{minHeight:90,background:D.bg2,borderRight:di<6?`1px solid ${D.border}`:"none"}}/>;
             const isToday=date.toDateString()===today.toDateString();
             const isSun=(date.getDay()+6)%7===6;
             const ck=`cal-${date.toDateString()}`;
@@ -836,33 +897,30 @@ function MonthCal({ users, shifts, schedule, monthRef, dragging, dragOver, setDr
                 onDragOver={e=>{ e.preventDefault(); setDragOver(ck); }}
                 onDragLeave={()=>setDragOver(null)}
                 onDrop={()=>{ if(!dragging) return; setDragOver(null); if(dragging.t==="user") setPicker({date,uid:dragging.uid}); setDragging(null); }}
-                style={{minHeight:90,padding:"5px 4px",background:isOver?"#F5F5F5":isToday?"#FAFAFA":isSun?"#FDFDFD":"#fff",borderRight:di<6?"1px solid #F0F0F0":"none",position:"relative"}}>
-                {/* Date number */}
+                style={{minHeight:90,padding:"5px 4px",background:isOver?D.bg3:isToday?D.bg2:isSun?D.bg2:D.bg,borderRight:di<6?`1px solid ${D.border}`:"none",position:"relative"}}>
                 <div style={{textAlign:"right",marginBottom:3}}>
-                  <span style={{fontSize:12,fontWeight:isToday?700:400,color:isToday?"#fff":"#333",background:isToday?"#111":"transparent",borderRadius:"50%",width:22,height:22,display:"inline-flex",alignItems:"center",justifyContent:"center"}}>{date.getDate()}</span>
+                  <span style={{fontSize:12,fontWeight:isToday?700:400,color:isToday?D.bg:isSun?D.text3:D.text2,background:isToday?D.text:"transparent",borderRadius:"50%",width:22,height:22,display:"inline-flex",alignItems:"center",justifyContent:"center"}}>{date.getDate()}</span>
                 </div>
-                {/* Events — compact chips */}
                 {events.slice(0,4).map(({u,v},ei)=>{
                   if(isSpec(v)){
                     const st=getSpec(v);
                     return <div key={ei} title={`${u.name}: ${st.label}`}
-                      style={{fontSize:9,fontWeight:500,color:st.color,background:st.bg,border:`1px solid ${st.border}`,borderRadius:3,padding:"1px 4px",marginBottom:1,display:"flex",alignItems:"center",gap:2,overflow:"hidden",whiteSpace:"nowrap",cursor:"default"}}>
+                      style={{fontSize:9,fontWeight:500,color:dark?lighten(st.color):st.color,background:dark?`${st.color}28`:st.bg,border:`1px solid ${dark?st.color+"44":st.border}`,borderRadius:3,padding:"1px 4px",marginBottom:1,display:"flex",alignItems:"center",gap:2,overflow:"hidden",whiteSpace:"nowrap",cursor:"default"}}>
                       <div style={{width:4,height:4,borderRadius:"50%",background:u.color,flexShrink:0}}/>
-                      <span style={{overflow:"hidden",textOverflow:"ellipsis"}}>{u.name.split(" ")[0]} · {st.sym}</span>
+                      <span style={{overflow:"hidden",textOverflow:"ellipsis"}}>{u.name.split(" ")[0]} · {st.label}</span>
                     </div>;
                   }
                   const s=shifts.find(x=>x.id===v);
                   if(!s) return null;
                   return <div key={ei} title={`${u.name}: ${s.name} ${s.start}–${s.end}`}
-                    style={{fontSize:9,fontWeight:500,color:s.color,background:`${s.color}12`,border:`1px solid ${s.color}22`,borderRadius:3,padding:"1px 4px",marginBottom:1,display:"flex",alignItems:"center",gap:2,overflow:"hidden",whiteSpace:"nowrap",cursor:"default"}}>
+                    style={{fontSize:9,fontWeight:500,color:dark?lighten(s.color):darken(s.color),background:dark?`${s.color}28`:`${s.color}12`,border:`1px solid ${dark?s.color+"44":`${s.color}22`}`,borderRadius:3,padding:"1px 4px",marginBottom:1,display:"flex",alignItems:"center",gap:2,overflow:"hidden",whiteSpace:"nowrap",cursor:"default"}}>
                     <div style={{width:4,height:4,borderRadius:"50%",background:s.color,flexShrink:0}}/>
                     <span style={{overflow:"hidden",textOverflow:"ellipsis"}}>{u.name.split(" ")[0]} · {s.name}</span>
                   </div>;
                 })}
-                {events.length>4 && <div style={{fontSize:9,color:"#BBB",paddingLeft:2}}>+{events.length-4} más</div>}
-                {/* + button on hover */}
+                {events.length>4 && <div style={{fontSize:9,color:D.text3,paddingLeft:2}}>+{events.length-4} más</div>}
                 <div onClick={()=>{ if(users.length>0) setPicker({date,uid:users[0].id}); }}
-                  style={{position:"absolute",top:4,left:4,fontSize:11,color:"#DDD",cursor:"pointer",lineHeight:1,opacity:0,transition:"opacity .13s"}}
+                  style={{position:"absolute",top:4,left:4,fontSize:9,color:D.text3,cursor:"pointer",lineHeight:1,opacity:0,transition:"opacity .13s"}}
                   onMouseEnter={e=>e.currentTarget.style.opacity=1} onMouseLeave={e=>e.currentTarget.style.opacity=0}>+</div>
               </div>
             );
@@ -898,7 +956,8 @@ function getPlanchaForDay(dateObj){
   return PLANCHA_USERS[planchaIdx];
 }
 
-function TasksTab({ users, schedule }) {
+function TasksTab({ users, schedule, dark }) {
+  const D = getD(dark);
   const [wo, setWo] = useState(0);
   const [rotNames, setRotNames] = useState(()=>JSON.parse(localStorage.getItem("so_rot_names")||JSON.stringify(ROTATING_TASKS)));
   const [fixNames, setFixNames] = useState(()=>JSON.parse(localStorage.getItem("so_fix_names")||JSON.stringify(FIXED_TASKS)));
@@ -936,34 +995,34 @@ function TasksTab({ users, schedule }) {
 
   function setColDay(dateKey,uid){ setColacion(p=>({...p,[dateKey]:uid})); }
 
-  // Table header component — dark text
+  // Table header component
   const TH=({children,w})=>(
-    <th style={{textAlign:"left",fontSize:11,fontWeight:600,color:"#111",padding:"9px 14px",borderBottom:"1px solid #D8D8D8",background:"#F7F7F7",width:w||"auto"}}>{children}</th>
+    <th style={{textAlign:"left",fontSize:11,fontWeight:600,color:D.text,padding:"9px 14px",borderBottom:`1px solid ${D.border2}`,background:D.bg2,width:w||"auto"}}>{children}</th>
   );
 
   const SectionTitle=({children})=>(
-    <div style={{fontSize:13,fontWeight:600,color:"#111",marginBottom:10,marginTop:28}}>{children}</div>
+    <div style={{fontSize:13,fontWeight:600,color:D.text,marginBottom:10,marginTop:28}}>{children}</div>
   );
 
   return (
-    <div style={{maxWidth:720,margin:"32px auto",padding:"0 24px"}}>
+    <div style={{maxWidth:720,margin:"32px auto",padding:"0 24px",color:D.text}}>
       {/* Header */}
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
         <div>
-          <div style={{fontSize:18,fontWeight:700}}>Tareas</div>
-          <div style={{fontSize:13,color:"#AAA",marginTop:2}}>Cocina · rotación automática</div>
+          <div style={{fontSize:18,fontWeight:700,color:D.text}}>Tareas</div>
+          <div style={{fontSize:13,color:D.text2,marginTop:2}}>Cocina · rotación automática</div>
         </div>
         <div style={{display:"flex",gap:6,alignItems:"center"}}>
           <button className="nav-btn" onClick={()=>setWo(w=>w-1)}>‹</button>
-          <span style={{fontSize:13,fontWeight:500,color:"#333",minWidth:158,textAlign:"center"}}>{weekLabel(wo)}</span>
+          <span style={{fontSize:13,fontWeight:500,color:D.text,minWidth:158,textAlign:"center"}}>{weekLabel(wo)}</span>
           <button className="nav-btn" onClick={()=>setWo(w=>w+1)}>›</button>
-          <button className="nav-btn" onClick={()=>setWo(0)} style={{fontSize:11,color:"#999"}}>Hoy</button>
+          <button className="nav-btn" onClick={()=>setWo(0)} style={{fontSize:11,color:D.text2}}>Hoy</button>
         </div>
       </div>
 
       {/* ── PLANCHA ── */}
       <SectionTitle>Plancha</SectionTitle>
-      <div style={{border:"1px solid #EBEBEB",borderRadius:10,overflow:"hidden",marginBottom:4}}>
+      <div style={{border:`1px solid ${D.border}`,borderRadius:10,overflow:"hidden",marginBottom:4}}>
         <table style={{width:"100%",borderCollapse:"collapse"}}>
           <thead><tr><TH w="16%">Día</TH><TH w="20%">Fecha</TH><TH>Persona</TH></tr></thead>
           <tbody>
@@ -975,14 +1034,14 @@ function TasksTab({ users, schedule }) {
               const u=planchaUsers.find(x=>x.id===assignedId)||planchaUsers.find(x=>x.id===autoUid);
               const isOverridden=!!planchaOverride[dateKey];
               return (
-                <tr key={day} className="task-row" style={{borderBottom:di<6?"1px solid #F5F5F5":"none"}}>
-                  <td style={{padding:"9px 14px",fontSize:12,fontWeight:500,color:"#111"}}>{day}</td>
-                  <td style={{padding:"9px 14px",fontSize:12,color:"#888"}}>{date?.toLocaleDateString("es-CL",{day:"numeric",month:"short"})}</td>
+                <tr key={day} className="task-row" style={{borderBottom:di<6?`1px solid ${D.border}`:"none"}}>
+                  <td style={{padding:"9px 14px",fontSize:12,fontWeight:500,color:D.text}}>{day}</td>
+                  <td style={{padding:"9px 14px",fontSize:12,color:D.text2}}>{date?.toLocaleDateString("es-CL",{day:"numeric",month:"short"})}</td>
                   <td style={{padding:"7px 14px"}}>
                     <div style={{display:"flex",alignItems:"center",gap:10}}>
                       <select value={assignedId||""}
                         onChange={e=>setPlanchaOverride(p=>({...p,[dateKey]:e.target.value}))}
-                        style={{fontSize:12,color:"#111",background:isOverridden?"#FDFAF0":"#FAFAFA",border:`1px solid ${isOverridden?"#E8D88A":"#EBEBEB"}`,borderRadius:5,padding:"4px 8px",width:190,cursor:"pointer",fontFamily:"inherit"}}>
+                        style={{fontSize:12,color:D.text,background:isOverridden?(dark?"#2A2200":"#FDFAF0"):D.bg2,border:`1px solid ${isOverridden?"#E8D88A":D.border}`,borderRadius:5,padding:"4px 8px",width:190,cursor:"pointer",fontFamily:"inherit"}}>
                         {planchaUsers.map(u=><option key={u.id} value={u.id}>{u.name}</option>)}
                       </select>
                       {isOverridden && <button className="btn" onClick={()=>setPlanchaOverride(p=>{ const n={...p}; delete n[dateKey]; return n; })}
@@ -995,11 +1054,11 @@ function TasksTab({ users, schedule }) {
           </tbody>
         </table>
       </div>
-      <div style={{fontSize:10,color:"#CCC",marginBottom:28,paddingLeft:2}}>Miriam no hace plancha. Rotación automática día por medio. Puedes editar cualquier día manualmente.</div>
+      <div style={{fontSize:10,color:D.text3,marginBottom:28,paddingLeft:2}}>Miriam no hace plancha. Rotación automática día por medio. Puedes editar cualquier día manualmente.</div>
 
       {/* ── COLACIÓN ── */}
       <SectionTitle>Colación de cocina</SectionTitle>
-      <div style={{border:"1px solid #EBEBEB",borderRadius:10,overflow:"hidden",marginBottom:4}}>
+      <div style={{border:`1px solid ${D.border}`,borderRadius:10,overflow:"hidden",marginBottom:4}}>
         <table style={{width:"100%",borderCollapse:"collapse"}}>
           <thead><tr><TH w="16%">Día</TH><TH w="20%">Fecha</TH><TH>Asignada a</TH></tr></thead>
           <tbody>
@@ -1008,8 +1067,6 @@ function TasksTab({ users, schedule }) {
               const dateKey=`col-${date?.toDateString()}`;
               const assignedId=colacion[dateKey];
               const assigned=kitchenUsers.find(u=>u.id===assignedId);
-
-              // Only show users who have a real shift that day (not libre/falta/etc)
               const wo2=dateToWO(date);
               const wk2=wKey(wo2);
               const daySched=schedule[wk2]||{};
@@ -1017,27 +1074,24 @@ function TasksTab({ users, schedule }) {
                 const v=daySched[`${day}-${u.id}`];
                 return v && !Object.values(SPECIAL).some(s=>s.id===v);
               });
-
-              // If assigned user no longer has shift, clear it
               const assignedStillWorking=assigned && availableUsers.some(u=>u.id===assigned.id);
-
               return (
-                <tr key={day} className="task-row" style={{borderBottom:di<6?"1px solid #F5F5F5":"none"}}>
-                  <td style={{padding:"9px 14px",fontSize:12,fontWeight:500,color:"#111"}}>{day}</td>
-                  <td style={{padding:"9px 14px",fontSize:12,color:"#888"}}>{date?.toLocaleDateString("es-CL",{day:"numeric",month:"short"})}</td>
+                <tr key={day} className="task-row" style={{borderBottom:di<6?`1px solid ${D.border}`:"none"}}>
+                  <td style={{padding:"9px 14px",fontSize:12,fontWeight:500,color:D.text}}>{day}</td>
+                  <td style={{padding:"9px 14px",fontSize:12,color:D.text2}}>{date?.toLocaleDateString("es-CL",{day:"numeric",month:"short"})}</td>
                   <td style={{padding:"7px 14px"}}>
                     {availableUsers.length===0
-                      ? <span style={{fontSize:12,color:"#CCC"}}>Sin turnos asignados</span>
+                      ? <span style={{fontSize:12,color:D.text3}}>Sin turnos asignados</span>
                       : <div style={{display:"flex",alignItems:"center",gap:10}}>
                           {assignedStillWorking
                             ? <div style={{display:"flex",alignItems:"center",gap:8,flex:1}}>
                                 <Av name={assigned.name} color={assigned.color} size={22}/>
-                                <span style={{fontSize:12,fontWeight:500,color:"#111"}}>{assigned.name}</span>
+                                <span style={{fontSize:12,fontWeight:500,color:D.text}}>{assigned.name}</span>
                                 <button className="btn" onClick={()=>setColDay(dateKey,null)}
-                                  style={{marginLeft:"auto",color:"#CCC",fontSize:12,background:"none",padding:"0 4px"}}>×</button>
+                                  style={{marginLeft:"auto",color:D.text2,fontSize:12,background:"none",padding:"0 4px"}}>×</button>
                               </div>
                             : <select value="" onChange={e=>{ if(e.target.value) setColDay(dateKey,e.target.value); }}
-                                style={{fontSize:12,color:"#888",background:"#FAFAFA",border:"1px solid #EBEBEB",borderRadius:5,padding:"4px 8px",width:180,cursor:"pointer",fontFamily:"inherit"}}>
+                                style={{fontSize:12,color:D.text2,background:D.bg2,border:`1px solid ${D.border}`,borderRadius:5,padding:"4px 8px",width:180,cursor:"pointer",fontFamily:"inherit"}}>
                                 <option value="">Sin asignar...</option>
                                 {availableUsers.map(u=><option key={u.id} value={u.id}>{u.name}</option>)}
                               </select>
@@ -1051,11 +1105,11 @@ function TasksTab({ users, schedule }) {
           </tbody>
         </table>
       </div>
-      <div style={{fontSize:10,color:"#CCC",marginBottom:28,paddingLeft:2}}>Solo aparecen personas con turno asignado ese día.</div>
+      <div style={{fontSize:10,color:D.text3,marginBottom:28,paddingLeft:2}}>Solo aparecen personas con turno asignado ese día.</div>
 
       {/* ── ROTATIVAS ── */}
       <SectionTitle>Tareas rotativas</SectionTitle>
-      <div style={{border:"1px solid #EBEBEB",borderRadius:10,overflow:"hidden",marginBottom:6}}>
+      <div style={{border:`1px solid ${D.border}`,borderRadius:10,overflow:"hidden",marginBottom:6}}>
         <table style={{width:"100%",borderCollapse:"collapse"}}>
           <thead><tr><TH w="45%">Tarea</TH><TH>Persona</TH><TH w="20%">Cargo</TH></tr></thead>
           <tbody>
@@ -1064,30 +1118,30 @@ function TasksTab({ users, schedule }) {
               const u=kitchenUsers.find(x=>x.id===assignedId);
               const isEditing=editingRot===i;
               return (
-                <tr key={i} className="task-row" style={{borderBottom:i<rotNames.length-1?"1px solid #F5F5F5":"none"}}>
-                  <td style={{padding:"9px 14px",fontSize:12,color:"#111"}}>
+                <tr key={i} className="task-row" style={{borderBottom:i<rotNames.length-1?`1px solid ${D.border}`:"none"}}>
+                  <td style={{padding:"9px 14px",fontSize:12,color:D.text}}>
                     {isEditing
                       ? <div style={{display:"flex",gap:6,alignItems:"center"}}>
                           <input value={editVal} onChange={e=>setEditVal(e.target.value)} autoFocus
                             onKeyDown={e=>{ if(e.key==="Enter") saveEdit("rot",i); if(e.key==="Escape") setEditingRot(null); }}
-                            style={{fontSize:12,padding:"3px 7px",border:"1px solid #D0D0D0",borderRadius:4,width:"100%"}}/>
-                          <button className="btn" onClick={()=>saveEdit("rot",i)} style={{background:"#111",color:"#fff",fontSize:11,padding:"3px 8px",borderRadius:4,flexShrink:0}}>ok</button>
+                            style={{fontSize:12,padding:"3px 7px",borderRadius:4,width:"100%"}}/>
+                          <button className="btn" onClick={()=>saveEdit("rot",i)} style={{background:D.tabActive,color:D.tabActiveText,fontSize:11,padding:"3px 8px",borderRadius:4,flexShrink:0}}>ok</button>
                         </div>
-                      : <span style={{cursor:"default"}} title="Doble clic para renombrar" onDoubleClick={()=>startEdit("rot",i,taskName)}>{taskName}</span>}
+                      : <span style={{cursor:"default"}} onDoubleClick={()=>startEdit("rot",i,taskName)}>{taskName}</span>}
                   </td>
-                  <td style={{padding:"9px 14px",fontSize:12}}>{u?<div style={{display:"flex",alignItems:"center",gap:8}}><Av name={u.name} color={u.color} size={22}/><span style={{fontWeight:500,color:"#111"}}>{u.name}</span></div>:<span style={{color:"#CCC"}}>—</span>}</td>
-                  <td style={{padding:"9px 14px",fontSize:12,color:"#888"}}>{u?.role||"—"}</td>
+                  <td style={{padding:"9px 14px",fontSize:12}}>{u?<div style={{display:"flex",alignItems:"center",gap:8}}><Av name={u.name} color={u.color} size={22}/><span style={{fontWeight:500,color:D.text}}>{u.name}</span></div>:<span style={{color:D.text3}}>—</span>}</td>
+                  <td style={{padding:"9px 14px",fontSize:12,color:D.text2}}>{u?.role||"—"}</td>
                 </tr>
               );
             })}
           </tbody>
         </table>
       </div>
-      <div style={{fontSize:10,color:"#CCC",marginBottom:28,paddingLeft:2}}>Doble clic en el nombre de la tarea para renombrarla.</div>
+      <div style={{fontSize:10,color:D.text3,marginBottom:28,paddingLeft:2}}>Doble clic en el nombre de la tarea para renombrarla.</div>
 
       {/* ── FIJAS ── */}
       <SectionTitle>Tareas fijas</SectionTitle>
-      <div style={{border:"1px solid #EBEBEB",borderRadius:10,overflow:"hidden",marginBottom:6}}>
+      <div style={{border:`1px solid ${D.border}`,borderRadius:10,overflow:"hidden",marginBottom:6}}>
         <table style={{width:"100%",borderCollapse:"collapse"}}>
           <thead><tr><TH w="45%">Tarea</TH><TH>Persona</TH><TH w="20%">Cargo</TH></tr></thead>
           <tbody>
@@ -1096,32 +1150,33 @@ function TasksTab({ users, schedule }) {
               const u=kitchenUsers.find(x=>x.id===assignedId);
               const isEditing=editingFix===i;
               return (
-                <tr key={i} className="task-row" style={{borderBottom:i<fixNames.length-1?"1px solid #F5F5F5":"none"}}>
-                  <td style={{padding:"9px 14px",fontSize:12,color:"#111"}}>
+                <tr key={i} className="task-row" style={{borderBottom:i<fixNames.length-1?`1px solid ${D.border}`:"none"}}>
+                  <td style={{padding:"9px 14px",fontSize:12,color:D.text}}>
                     {isEditing
                       ? <div style={{display:"flex",gap:6,alignItems:"center"}}>
                           <input value={editVal} onChange={e=>setEditVal(e.target.value)} autoFocus
                             onKeyDown={e=>{ if(e.key==="Enter") saveEdit("fix",i); if(e.key==="Escape") setEditingFix(null); }}
-                            style={{fontSize:12,padding:"3px 7px",border:"1px solid #D0D0D0",borderRadius:4,width:"100%"}}/>
-                          <button className="btn" onClick={()=>saveEdit("fix",i)} style={{background:"#111",color:"#fff",fontSize:11,padding:"3px 8px",borderRadius:4,flexShrink:0}}>ok</button>
+                            style={{fontSize:12,padding:"3px 7px",borderRadius:4,width:"100%"}}/>
+                          <button className="btn" onClick={()=>saveEdit("fix",i)} style={{background:D.tabActive,color:D.tabActiveText,fontSize:11,padding:"3px 8px",borderRadius:4,flexShrink:0}}>ok</button>
                         </div>
-                      : <span style={{cursor:"default"}} title="Doble clic para renombrar" onDoubleClick={()=>startEdit("fix",i,taskName)}>{taskName}</span>}
+                      : <span style={{cursor:"default"}} onDoubleClick={()=>startEdit("fix",i,taskName)}>{taskName}</span>}
                   </td>
-                  <td style={{padding:"9px 14px",fontSize:12}}>{u?<div style={{display:"flex",alignItems:"center",gap:8}}><Av name={u.name} color={u.color} size={22}/><span style={{fontWeight:500,color:"#111"}}>{u.name}</span></div>:<span style={{color:"#CCC"}}>—</span>}</td>
-                  <td style={{padding:"9px 14px",fontSize:12,color:"#888"}}>{u?.role||"—"}</td>
+                  <td style={{padding:"9px 14px",fontSize:12}}>{u?<div style={{display:"flex",alignItems:"center",gap:8}}><Av name={u.name} color={u.color} size={22}/><span style={{fontWeight:500,color:D.text}}>{u.name}</span></div>:<span style={{color:D.text3}}>—</span>}</td>
+                  <td style={{padding:"9px 14px",fontSize:12,color:D.text2}}>{u?.role||"—"}</td>
                 </tr>
               );
             })}
           </tbody>
         </table>
       </div>
-      <div style={{fontSize:10,color:"#CCC",paddingLeft:2}}>Doble clic en el nombre de la tarea para renombrarla.</div>
+      <div style={{fontSize:10,color:D.text3,paddingLeft:2}}>Doble clic en el nombre de la tarea para renombrarla.</div>
     </div>
   );
 }
 
 // ─── PROFILE MODAL ────────────────────────────────────────────────────────────
-function ProfileModal({ user, users, shifts, schedule, onClose, onEdit }) {
+function ProfileModal({ user, users, shifts, schedule, dark, onClose, onEdit }) {
+  const D = getD(dark);
   const [wo, setWo] = useState(0);
   const printRef = useRef();
   const wk = wKey(wo);
@@ -1212,68 +1267,67 @@ function ProfileModal({ user, users, shifts, schedule, onClose, onEdit }) {
 
   return (
     <div className="modal-bg" onClick={onClose}>
-      <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:14,padding:0,width:520,maxHeight:"88vh",overflowY:"auto",boxShadow:"0 12px 40px rgba(0,0,0,.13)"}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:D.bg2,borderRadius:14,padding:0,width:520,maxHeight:"88vh",overflowY:"auto",boxShadow:"0 12px 40px rgba(0,0,0,.25)",border:`1px solid ${D.border}`}}>
         {/* Header */}
-        <div style={{padding:"22px 24px 18px",borderBottom:"1px solid #F0F0F0",display:"flex",alignItems:"center",gap:14}}>
+        <div style={{padding:"22px 24px 18px",borderBottom:`1px solid ${D.border}`,display:"flex",alignItems:"center",gap:14}}>
           <Av name={user.name} color={user.color} size={44}/>
           <div style={{flex:1}}>
-            <div style={{fontSize:17,fontWeight:700}}>{user.name}</div>
-            <div style={{fontSize:12,color:"#888",marginTop:2}}>{user.role||"Sin cargo"} · {user.area}</div>
+            <div style={{fontSize:17,fontWeight:700,color:D.text}}>{user.name}</div>
+            <div style={{fontSize:12,color:D.text2,marginTop:2}}>{user.role||"Sin cargo"} · {user.area}</div>
           </div>
           <div style={{display:"flex",gap:7}}>
-            <button className="btn" onClick={printPDF} style={{background:"#111",color:"#fff",padding:"6px 13px",borderRadius:6,fontSize:12,fontWeight:500}}>↓ PDF</button>
-            <button className="btn" onClick={()=>onEdit(user)} style={{background:"#F5F5F5",color:"#333",padding:"6px 11px",borderRadius:6,fontSize:12}}>Editar</button>
-            <button className="btn" onClick={onClose} style={{background:"none",color:"#BBB",fontSize:18,padding:"0 4px"}}>×</button>
+            <button className="btn" onClick={printPDF} style={{background:D.tabActive,color:D.tabActiveText,padding:"6px 13px",borderRadius:6,fontSize:12,fontWeight:500}}>↓ PDF</button>
+            <button className="btn" onClick={()=>onEdit(user)} style={{background:D.bg3,color:D.text,padding:"6px 11px",borderRadius:6,fontSize:12}}>Editar</button>
+            <button className="btn" onClick={onClose} style={{background:"none",color:D.text2,fontSize:18,padding:"0 4px"}}>×</button>
           </div>
         </div>
 
         {/* Week nav */}
-        <div style={{padding:"10px 24px",borderBottom:"1px solid #F0F0F0",display:"flex",alignItems:"center",gap:8}}>
+        <div style={{padding:"10px 24px",borderBottom:`1px solid ${D.border}`,display:"flex",alignItems:"center",gap:8}}>
           <button className="nav-btn" onClick={()=>setWo(w=>w-1)}>‹</button>
-          <span style={{fontSize:12,fontWeight:500,color:"#333",flex:1,textAlign:"center"}}>{weekLabel(wo)}</span>
+          <span style={{fontSize:12,fontWeight:500,color:D.text,flex:1,textAlign:"center"}}>{weekLabel(wo)}</span>
           <button className="nav-btn" onClick={()=>setWo(w=>w+1)}>›</button>
-          <button className="nav-btn" onClick={()=>setWo(0)} style={{fontSize:10,color:"#999"}}>Hoy</button>
+          <button className="nav-btn" onClick={()=>setWo(0)} style={{fontSize:10,color:D.text2}}>Hoy</button>
         </div>
 
         <div ref={printRef} style={{padding:"18px 24px"}}>
           {/* Schedule */}
-          <div style={{fontSize:10,fontWeight:700,color:"#AAA",textTransform:"uppercase",letterSpacing:".7px",marginBottom:10}}>Horario</div>
+          <div style={{fontSize:10,fontWeight:700,color:D.text2,textTransform:"uppercase",letterSpacing:".7px",marginBottom:10}}>Horario</div>
           <table style={{width:"100%",borderCollapse:"collapse",marginBottom:6}}>
             <thead>
-              <tr style={{background:"#FAFAFA"}}>
-                <th style={{textAlign:"left",fontSize:11,fontWeight:600,color:"#111",padding:"7px 10px",borderBottom:"1px solid #DEDEDE",width:"42%"}}>Día</th>
-                <th style={{textAlign:"left",fontSize:11,fontWeight:600,color:"#111",padding:"7px 10px",borderBottom:"1px solid #DEDEDE"}}>Horario</th>
+              <tr style={{background:D.tableHead}}>
+                <th style={{textAlign:"left",fontSize:11,fontWeight:600,color:D.text,padding:"7px 10px",borderBottom:`1px solid ${D.border}`,width:"42%"}}>Día</th>
+                <th style={{textAlign:"left",fontSize:11,fontWeight:600,color:D.text,padding:"7px 10px",borderBottom:`1px solid ${D.border}`}}>Horario</th>
               </tr>
             </thead>
             <tbody>
               {dayRows.map((r,i)=>(
-                <tr key={r.day} style={{borderBottom:i<6?"1px solid #F5F5F5":"none"}}>
-                  <td style={{padding:"8px 10px",fontSize:12,fontWeight:500,color:"#111",whiteSpace:"nowrap"}}>
-                    {r.day} <span style={{fontWeight:400,color:"#888"}}>{r.date?.getDate()}</span>
+                <tr key={r.day} style={{borderBottom:i<6?`1px solid ${D.border}`:"none"}}>
+                  <td style={{padding:"8px 10px",fontSize:12,fontWeight:500,color:D.text,whiteSpace:"nowrap"}}>
+                    {r.day} <span style={{fontWeight:400,color:D.text2}}>{r.date?.getDate()}</span>
                   </td>
-                  <td style={{padding:"8px 10px",fontSize:12,color:r.label==="—"?"#CCC":"#111"}}>{r.label}</td>
+                  <td style={{padding:"8px 10px",fontSize:12,color:r.label==="—"?D.text3:D.text}}>{r.label}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-          <div style={{textAlign:"right",fontSize:11,color:totalH>RULES.WEEK_H?"#9B2335":totalH>=42?"#3D7A61":"#888",marginBottom:22}}>
+          <div style={{textAlign:"right",fontSize:11,color:totalH>RULES.WEEK_H?"#9B2335":totalH>=42?"#3D7A61":D.text2,marginBottom:22}}>
             {totalH.toFixed(1)}h / 44h
           </div>
 
-          {/* Tasks (kitchen only) */}
+          {/* Tasks */}
           {user.area==="Cocina" && (rotTask||fixTask||colacionDays.length>0) && (
             <>
-              <div style={{fontSize:10,fontWeight:700,color:"#AAA",textTransform:"uppercase",letterSpacing:".7px",marginBottom:10}}>Tareas esta semana</div>
-              <div style={{border:"1px solid #EBEBEB",borderRadius:8,overflow:"hidden"}}>
-                {rotTask && <div style={{padding:"9px 14px",borderBottom:(fixTask||colacionDays.length>0)?"1px solid #F5F5F5":"none",fontSize:13,fontWeight:500,color:"#111"}}>{rotTask}</div>}
-                {fixTask && <div style={{padding:"9px 14px",borderBottom:colacionDays.length>0?"1px solid #F5F5F5":"none",fontSize:13,fontWeight:500,color:"#111"}}>{fixTask}</div>}
-                {colacionDays.length>0 && <div style={{padding:"9px 14px",fontSize:13,fontWeight:500,color:"#111"}}>Colación — <span style={{fontWeight:400,color:"#666"}}>{colacionDays.join(", ")}</span></div>}
-                {!rotTask && !fixTask && colacionDays.length===0 && <div style={{padding:"12px 14px",fontSize:12,color:"#CCC"}}>Sin tareas esta semana.</div>}
+              <div style={{fontSize:10,fontWeight:700,color:D.text2,textTransform:"uppercase",letterSpacing:".7px",marginBottom:10}}>Tareas esta semana</div>
+              <div style={{border:`1px solid ${D.border}`,borderRadius:8,overflow:"hidden"}}>
+                {rotTask && <div style={{padding:"9px 14px",borderBottom:(fixTask||colacionDays.length>0)?`1px solid ${D.border}`:"none",fontSize:13,fontWeight:500,color:D.text}}>{rotTask}</div>}
+                {fixTask && <div style={{padding:"9px 14px",borderBottom:colacionDays.length>0?`1px solid ${D.border}`:"none",fontSize:13,fontWeight:500,color:D.text}}>{fixTask}</div>}
+                {colacionDays.length>0 && <div style={{padding:"9px 14px",fontSize:13,fontWeight:500,color:D.text}}>Colación — <span style={{fontWeight:400,color:D.text2}}>{colacionDays.join(", ")}</span></div>}
               </div>
             </>
           )}
           {user.area==="Cocina" && !rotTask && !fixTask && colacionDays.length===0 && (
-            <><div style={{fontSize:10,fontWeight:700,color:"#AAA",textTransform:"uppercase",letterSpacing:".7px",marginBottom:10}}>Tareas esta semana</div><div style={{padding:"12px 14px",fontSize:12,color:"#CCC",border:"1px solid #EBEBEB",borderRadius:8}}>Sin tareas esta semana.</div></>
+            <><div style={{fontSize:10,fontWeight:700,color:D.text2,textTransform:"uppercase",letterSpacing:".7px",marginBottom:10}}>Tareas esta semana</div><div style={{padding:"12px 14px",fontSize:12,color:D.text3,border:`1px solid ${D.border}`,borderRadius:8}}>Sin tareas esta semana.</div></>
           )}
         </div>
       </div>
@@ -1282,95 +1336,74 @@ function ProfileModal({ user, users, shifts, schedule, onClose, onEdit }) {
 }
 
 // ─── REPORT MODAL ─────────────────────────────────────────────────────────────
-function ReportModal({ users, shifts, schedule, wo, monthRef, onClose }) {
-  const [area,    setArea]    = useState("Cocina");
-  const [period,  setPeriod]  = useState("week"); // "week" | "month"
+function ReportModal({ users, shifts, schedule, wo, monthRef, dark, onClose }) {
+  const D = getD(dark);
+  const [area, setArea] = useState("Cocina");
+  const [period, setPeriod] = useState("week-current"); // "week-current"|"week-prev"|"month-current"|"custom"
   const today = new Date();
+  // Custom range state
+  const [customWo1, setCustomWo1] = useState(wo);
+  const [customWo2, setCustomWo2] = useState(wo);
 
-  function buildWeekRows(filterArea) {
-    const wk=wKey(wo), wSched=schedule[wk]||{};
-    const aUsers=users.filter(u=>u.area===filterArea);
-    return { users:aUsers, dates:weekDates(wo), sched:wSched, label:weekLabel(wo) };
-  }
-  function buildMonthRows(filterArea) {
-    const aUsers=users.filter(u=>u.area===filterArea);
-    const allDates=monthDates(monthRef.y,monthRef.m);
-    return { users:aUsers, dates:allDates, label:`${MONTH_NAMES[monthRef.m]} ${monthRef.y}` };
+  function getLabel() {
+    if(period==="week-current") return weekLabel(wo);
+    if(period==="week-prev") return weekLabel(wo-1);
+    if(period==="month-current") return `${MONTH_NAMES[monthRef.m]} ${monthRef.y}`;
+    return `${weekLabel(customWo1)} — ${weekLabel(customWo2)}`;
   }
 
-  function generateHTML(filterArea) {
-    const cols = period==="week" ? DAYS : null;
+  function buildHTML(filterArea) {
     let tableHTML="";
-
-    if(period==="week"){
-      const {users:au, dates:wd, sched, label} = buildWeekRows(filterArea);
-      tableHTML=`
-        <h2>${filterArea} · ${label}</h2>
-        <table>
-          <thead><tr><th>Persona</th>${wd.map((d,di)=>`<th>${DAY_SHORT[di]}<br><span style="font-weight:400;color:#888">${d.getDate()}</span></th>`).join("")}<th>hrs</th></tr></thead>
-          <tbody>
-          ${au.map(u=>{
-            let th=0;
-            const cells=DAYS.map(day=>{
-              const c=sched[`${day}-${u.id}`]; if(!c) return "<td>—</td>";
-              const sp=getSpec(c); if(sp) return `<td><span class="badge">${sp.hidden?"":sp.label}</span></td>`;
-              const s=shifts.find(x=>x.id===c); if(!s) return "<td>—</td>";
-              th+=shiftH(s);
-              return `<td>${s.name}<br><span style="color:#888;font-size:10px">${s.start}–${s.end}</span></td>`;
-            }).join("");
-            return `<tr><td class="name">${u.name}</td>${cells}<td class="hrs">${th.toFixed(1)}h</td></tr>`;
-          }).join("")}
-          </tbody>
-        </table>`;
+    if(period==="week-current"||period==="week-prev") {
+      const w = period==="week-prev" ? wo-1 : wo;
+      const wk2=wKey(w), wSched=schedule[wk2]||{};
+      const au=users.filter(u=>u.area===filterArea);
+      const wd=weekDates(w);
+      tableHTML=`<h2>${filterArea} · ${weekLabel(w)}</h2><table>
+        <thead><tr><th>Persona</th>${wd.map((d,di)=>`<th>${DAY_SHORT[di]}<br><span style="font-weight:400;color:#888">${d.getDate()}</span></th>`).join("")}<th>hrs</th></tr></thead>
+        <tbody>${au.map(u=>{
+          let th=0;
+          const cells=DAYS.map(day=>{ const c=wSched[`${day}-${u.id}`]; if(!c) return "<td>—</td>"; const sp=getSpec(c); if(sp) return `<td>${sp.hidden?"":sp.label}</td>`; const s=shifts.find(x=>x.id===c); if(!s) return "<td>—</td>"; th+=shiftH(s); return `<td>${s.name}<br><span style="color:#888;font-size:10px">${s.start}–${s.end}</span></td>`; }).join("");
+          return `<tr><td class="name">${u.name}</td>${cells}<td class="hrs">${th.toFixed(1)}h</td></tr>`;
+        }).join("")}</tbody></table>`;
+    } else if(period==="month-current") {
+      const au=users.filter(u=>u.area===filterArea);
+      const allD=monthDates(monthRef.y,monthRef.m);
+      tableHTML=`<h2>${filterArea} · ${MONTH_NAMES[monthRef.m]} ${monthRef.y}</h2><table>
+        <thead><tr><th>Día</th><th>Fecha</th>${au.map(u=>`<th>${u.name.split(" ")[0]}</th>`).join("")}</tr></thead>
+        <tbody>${allD.map(date=>{ const di=(date.getDay()+6)%7; const cells=au.map(u=>{ const c=cellByDate(schedule,date,u.id); if(!c) return "<td>—</td>"; const sp=getSpec(c); if(sp) return `<td>${sp.hidden?"":sp.label}</td>`; const s=shifts.find(x=>x.id===c); if(!s) return "<td>—</td>"; return `<td>${s.name}</td>`; }).join(""); return `<tr style="${di===6?'color:#AAA':''}"><td>${DAY_SHORT[di]}</td><td style="color:#888">${date.getDate()}</td>${cells}</tr>`; }).join("")}</tbody></table>`;
     } else {
-      const {users:au, dates:allD, label} = buildMonthRows(filterArea);
-      tableHTML=`
-        <h2>${filterArea} · ${label}</h2>
-        <table>
-          <thead><tr><th>Día</th><th>Fecha</th>${au.map(u=>`<th>${u.name.split(" ")[0]}</th>`).join("")}</tr></thead>
-          <tbody>
-          ${allD.map(date=>{
-            const di=(date.getDay()+6)%7;
-            const cells=au.map(u=>{
-              const c=cellByDate(schedule,date,u.id); if(!c) return "<td>—</td>";
-              const sp=getSpec(c); if(sp) return `<td>${sp.hidden?"":sp.label}</td>`;
-              const s=shifts.find(x=>x.id===c); if(!s) return "<td>—</td>";
-              return `<td>${s.name}</td>`;
-            }).join("");
-            return `<tr style="${di===6?'color:#AAA':''}"><td>${DAY_SHORT[di]}</td><td style="color:#888">${date.getDate()}</td>${cells}</tr>`;
-          }).join("")}
-          </tbody>
-        </table>`;
+      // custom — iterate each week in range
+      const lo=Math.min(customWo1,customWo2), hi=Math.max(customWo1,customWo2);
+      const au=users.filter(u=>u.area===filterArea);
+      tableHTML="";
+      for(let w=lo;w<=hi;w++){
+        const wk2=wKey(w), wSched=schedule[wk2]||{};
+        const wd=weekDates(w);
+        tableHTML+=`<h2>${filterArea} · ${weekLabel(w)}</h2><table>
+          <thead><tr><th>Persona</th>${wd.map((d,di)=>`<th>${DAY_SHORT[di]}<br><span style="font-weight:400;color:#888">${d.getDate()}</span></th>`).join("")}<th>hrs</th></tr></thead>
+          <tbody>${au.map(u=>{ let th=0; const cells=DAYS.map(day=>{ const c=wSched[`${day}-${u.id}`]; if(!c) return "<td>—</td>"; const sp=getSpec(c); if(sp) return `<td>${sp.hidden?"":sp.label}</td>`; const s=shifts.find(x=>x.id===c); if(!s) return "<td>—</td>"; th+=shiftH(s); return `<td>${s.name}<br><span style="color:#888;font-size:10px">${s.start}–${s.end}</span></td>`; }).join(""); return `<tr><td class="name">${u.name}</td>${cells}<td class="hrs">${th.toFixed(1)}h</td></tr>`; }).join("")}</tbody></table>`;
+      }
     }
-
     return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Reporte ${filterArea}</title>
-    <style>
-      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-      *{box-sizing:border-box;margin:0;padding:0;}
-      body{font-family:'Inter',sans-serif;color:#111;background:#fff;padding:40px 48px;-webkit-print-color-adjust:exact;}
-      h1{font-size:22px;font-weight:700;margin-bottom:4px;letter-spacing:-.4px;}
-      h2{font-size:14px;font-weight:600;color:#333;margin-bottom:12px;margin-top:28px;}
-      .meta{font-size:12px;color:#888;margin-bottom:32px;}
-      table{width:100%;border-collapse:collapse;font-size:11px;margin-bottom:8px;}
-      th{text-align:left;font-weight:600;color:#111;padding:7px 10px;border-bottom:2px solid #111;background:#fff;white-space:nowrap;}
-      td{padding:7px 10px;border-bottom:1px solid #F0F0F0;vertical-align:top;}
-      tr:last-child td{border-bottom:none;}
-      .name{font-weight:500;}
-      .hrs{font-weight:600;text-align:right;white-space:nowrap;}
-      .badge{display:inline-block;padding:1px 5px;border-radius:3px;background:#F0F0F0;color:#555;font-size:10px;}
-      .footer{margin-top:40px;font-size:10px;color:#CCC;border-top:1px solid #EBEBEB;padding-top:12px;display:flex;justify-content:space-between;}
-      @media print{body{padding:24px 32px;}h2{margin-top:20px;}}
-    </style></head><body>
-    <h1>stShifts · Reporte de horarios</h1>
+    <style>@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    *{box-sizing:border-box;margin:0;padding:0;}body{font-family:'Inter',sans-serif;color:#111;background:#fff;padding:40px 48px;-webkit-print-color-adjust:exact;}
+    h1{font-size:20px;font-weight:700;margin-bottom:4px;}h2{font-size:13px;font-weight:600;color:#333;margin-bottom:10px;margin-top:24px;}
+    .meta{font-size:11px;color:#888;margin-bottom:28px;}table{width:100%;border-collapse:collapse;font-size:11px;margin-bottom:6px;}
+    th{text-align:left;font-weight:600;color:#111;padding:6px 9px;border-bottom:2px solid #111;white-space:nowrap;}
+    td{padding:6px 9px;border-bottom:1px solid #F0F0F0;vertical-align:top;}.name{font-weight:500;}.hrs{font-weight:600;text-align:right;white-space:nowrap;}
+    .footer{margin-top:36px;font-size:10px;color:#CCC;border-top:1px solid #EBEBEB;padding-top:10px;display:flex;justify-content:space-between;}
+    @media print{body{padding:24px 32px;}}</style></head><body>
+    <h1>stShifts · ${filterArea}</h1>
     <div class="meta">Generado el ${today.toLocaleDateString("es-CL",{day:"numeric",month:"long",year:"numeric"})}</div>
     ${tableHTML}
-    <div class="footer"><span>stShifts</span><span>${filterArea}</span></div>
+    <div class="footer"><span>stShifts</span><span>${getLabel()}</span></div>
     <script>window.onload=function(){window.print();window.onafterprint=function(){window.close();};};<\/script>
     </body></html>`;
   }
 
   function printReport(){
-    const html=generateHTML(area);
+    const html=buildHTML(area);
     const blob=new Blob([html],{type:"text/html;charset=utf-8"});
     const url=URL.createObjectURL(blob);
     const w=window.open(url,"_blank","width=1000,height=800");
@@ -1378,35 +1411,69 @@ function ReportModal({ users, shifts, schedule, wo, monthRef, onClose }) {
     setTimeout(()=>URL.revokeObjectURL(url),10000);
   }
 
+  const SelBtn=({active,onClick,children})=>(
+    <button className="btn" onClick={onClick} style={{flex:1,padding:"7px 6px",borderRadius:6,fontSize:12,fontWeight:500,
+      background:active?D.tabActive:D.bg3,color:active?D.tabActiveText:D.text2,
+      border:`1px solid ${active?D.tabActive:D.border}`}}>
+      {children}
+    </button>
+  );
+
   return (
     <div className="modal-bg" onClick={onClose}>
-      <div className="modal" onClick={e=>e.stopPropagation()} style={{width:380}}>
-        <div style={{fontSize:15,fontWeight:700,marginBottom:4}}>Generar reporte</div>
-        <div style={{fontSize:12,color:"#AAA",marginBottom:20}}>Horario completo por área, imprimible</div>
-
-        <span className="lbl">Área</span>
-        <div style={{display:"flex",gap:6,marginTop:6,marginBottom:4}}>
-          {["Cocina","Caja"].map(a=>(
-            <button key={a} className="btn" onClick={()=>setArea(a)}
-              style={{flex:1,padding:"8px",borderRadius:6,fontSize:13,fontWeight:500,background:area===a?"#111":"#F5F5F5",color:area===a?"#fff":"#333",border:"1px solid transparent"}}>
-              {a}
-            </button>
-          ))}
+      <div className="modal" onClick={e=>e.stopPropagation()} style={{width:370,background:D.bg2,border:`1px solid ${D.border}`,padding:0,overflow:"hidden"}}>
+        {/* Header */}
+        <div style={{padding:"16px 18px 12px",borderBottom:`1px solid ${D.border}`,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <div>
+            <div style={{fontSize:14,fontWeight:600,color:D.text}}>Generar reporte</div>
+            <div style={{fontSize:11,color:D.text2,marginTop:2}}>Horario por área · imprimible</div>
+          </div>
+          <button className="btn" onClick={onClose} style={{background:"none",color:D.text2,fontSize:16,padding:"2px 5px",borderRadius:4,lineHeight:1}}>×</button>
         </div>
 
-        <span className="lbl">Período</span>
-        <div style={{display:"flex",gap:6,marginTop:6,marginBottom:20}}>
-          {[["week","Semana actual"],["month","Mes actual"]].map(([v,l])=>(
-            <button key={v} className="btn" onClick={()=>setPeriod(v)}
-              style={{flex:1,padding:"8px",borderRadius:6,fontSize:13,fontWeight:500,background:period===v?"#111":"#F5F5F5",color:period===v?"#fff":"#333",border:"1px solid transparent"}}>
-              {l}
-            </button>
-          ))}
-        </div>
+        <div style={{padding:"16px 18px"}}>
+          {/* Área */}
+          <span className="lbl">Área</span>
+          <div style={{display:"flex",gap:5,marginTop:6,marginBottom:14}}>
+            <SelBtn active={area==="Cocina"} onClick={()=>setArea("Cocina")}>Cocina</SelBtn>
+            <SelBtn active={area==="Caja"} onClick={()=>setArea("Caja")}>Caja</SelBtn>
+          </div>
 
-        <div style={{display:"flex",gap:8}}>
-          <button className="btn" onClick={onClose} style={{flex:1,background:"#F3F4F6",color:"#555",padding:"9px",borderRadius:6,fontSize:13}}>Cancelar</button>
-          <button className="btn" onClick={printReport} style={{flex:1,background:"#111",color:"#fff",padding:"9px",borderRadius:6,fontSize:13,fontWeight:500}}>↓ PDF</button>
+          {/* Período */}
+          <span className="lbl">Período</span>
+          <div style={{display:"flex",gap:5,marginTop:6,marginBottom:6}}>
+            <SelBtn active={period==="week-current"} onClick={()=>setPeriod("week-current")}>Semana actual</SelBtn>
+            <SelBtn active={period==="week-prev"} onClick={()=>setPeriod("week-prev")}>Semana anterior</SelBtn>
+          </div>
+          <div style={{display:"flex",gap:5,marginBottom:14}}>
+            <SelBtn active={period==="month-current"} onClick={()=>setPeriod("month-current")}>Mes actual</SelBtn>
+            <SelBtn active={period==="custom"} onClick={()=>setPeriod("custom")}>Personalizado</SelBtn>
+          </div>
+
+          {/* Custom range */}
+          {period==="custom" && (
+            <div style={{background:D.bg3,borderRadius:8,padding:"12px 14px",marginBottom:14}}>
+              <div style={{fontSize:11,color:D.text2,marginBottom:10}}>Selecciona rango de semanas</div>
+              <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:8}}>
+                <span style={{fontSize:11,color:D.text2,width:36,flexShrink:0}}>Desde</span>
+                <button className="nav-btn" onClick={()=>setCustomWo1(w=>w-1)} style={{padding:"3px 7px"}}>‹</button>
+                <span style={{flex:1,textAlign:"center",fontSize:11,fontWeight:500,color:D.text}}>{weekLabel(customWo1)}</span>
+                <button className="nav-btn" onClick={()=>setCustomWo1(w=>w+1)} style={{padding:"3px 7px"}}>›</button>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:6}}>
+                <span style={{fontSize:11,color:D.text2,width:36,flexShrink:0}}>Hasta</span>
+                <button className="nav-btn" onClick={()=>setCustomWo2(w=>w-1)} style={{padding:"3px 7px"}}>‹</button>
+                <span style={{flex:1,textAlign:"center",fontSize:11,fontWeight:500,color:D.text}}>{weekLabel(customWo2)}</span>
+                <button className="nav-btn" onClick={()=>setCustomWo2(w=>w+1)} style={{padding:"3px 7px"}}>›</button>
+              </div>
+            </div>
+          )}
+
+          {/* Generate */}
+          <button className="btn" onClick={printReport}
+            style={{width:"100%",background:D.tabActive,color:D.tabActiveText,padding:"10px",borderRadius:7,fontSize:13,fontWeight:500}}>
+            ↓ Generar PDF
+          </button>
         </div>
       </div>
     </div>
@@ -1607,78 +1674,94 @@ function CellTag({ val, shifts, dark }) {
   if(!val) return null;
   if(isSpec(val)){
     const st=getSpec(val);
-    return <div style={{background:dark?`${st.color}22`:st.bg,border:`1px solid ${dark?st.color+"44":st.border}`,borderRadius:6,padding:"4px 7px"}}>
-      <div style={{fontSize:10,fontWeight:600,color:st.color,lineHeight:1.3}}>
-        {st.sym?`${st.sym} ${st.label}`:st.label}
-      </div>
+    return <div style={{background:dark?`${st.color}28`:st.bg,border:`1px solid ${dark?st.color+"55":st.border}`,borderRadius:6,padding:"4px 7px"}}>
+      <div style={{fontSize:10,fontWeight:600,color:dark?lighten(st.color):st.color,lineHeight:1.3}}>{st.label}</div>
+      <div style={{fontSize:9,marginTop:1}}>&nbsp;</div>
     </div>;
   }
   const s=shifts.find(x=>x.id===val);
   if(!s) return null;
-  return <div style={{background:dark?`${s.color}22`:`${s.color}12`,border:`1px solid ${dark?s.color+"44":`${s.color}28`}`,borderRadius:6,padding:"4px 7px"}}>
-    <div style={{fontSize:10,fontWeight:600,color:s.color,lineHeight:1.3}}>{s.name}</div>
-    <div style={{fontSize:9,color:`${s.color}88`,marginTop:1}}>{s.start}–{s.end}</div>
+  const nameColor = dark ? lighten(s.color) : darken(s.color);
+  const timeColor = dark ? `${lighten(s.color)}BB` : `${darken(s.color)}99`;
+  return <div style={{background:dark?`${s.color}28`:`${s.color}14`,border:`1px solid ${dark?s.color+"55":`${s.color}35`}`,borderRadius:6,padding:"4px 7px"}}>
+    <div style={{fontSize:10,fontWeight:700,color:nameColor,lineHeight:1.3}}>{s.name}</div>
+    <div style={{fontSize:9,fontWeight:500,color:timeColor,marginTop:1}}>{s.start}–{s.end}</div>
   </div>;
 }
 
-function PickerModal({ context, users, shifts, onPick, onClose }) {
+function lighten(hex){
+  // lighten a hex color for dark backgrounds
+  const r=parseInt(hex.slice(1,3),16), g=parseInt(hex.slice(3,5),16), b=parseInt(hex.slice(5,7),16);
+  const lr=Math.min(255,r+80), lg=Math.min(255,g+80), lb=Math.min(255,b+80);
+  return `#${lr.toString(16).padStart(2,"0")}${lg.toString(16).padStart(2,"0")}${lb.toString(16).padStart(2,"0")}`;
+}
+function darken(hex){
+  // darken a hex color for light backgrounds
+  const r=parseInt(hex.slice(1,3),16), g=parseInt(hex.slice(3,5),16), b=parseInt(hex.slice(5,7),16);
+  const dr=Math.max(0,r-30), dg=Math.max(0,g-30), db=Math.max(0,b-30);
+  return `#${dr.toString(16).padStart(2,"0")}${dg.toString(16).padStart(2,"0")}${db.toString(16).padStart(2,"0")}`;
+}
+
+function PickerModal({ context, users, shifts, dark, onPick, onClose }) {
+  const D=getD(dark);
   const user=users.find(u=>u.id===context.uid);
   const label=context.date?context.date.toLocaleDateString("es-CL",{weekday:"long",day:"numeric",month:"long"}):context.day;
   return (
     <div className="modal-bg" onClick={onClose}>
-      <div className="modal" onClick={e=>e.stopPropagation()} style={{maxHeight:"82vh",overflowY:"auto"}}>
-        <div style={{fontSize:14,fontWeight:700,marginBottom:2}}>Asignar</div>
-        <div style={{fontSize:12,color:"#AAA",marginBottom:16,textTransform:"capitalize"}}>{label} · {user?.name}</div>
+      <div className="modal" onClick={e=>e.stopPropagation()} style={{maxHeight:"82vh",overflowY:"auto",background:D.bg2,border:`1px solid ${D.border}`}}>
+        <div style={{fontSize:14,fontWeight:700,color:D.text,marginBottom:2}}>Asignar</div>
+        <div style={{fontSize:12,color:D.text2,marginBottom:16,textTransform:"capitalize"}}>{label} · {user?.name}</div>
         <span className="lbl">Turnos</span>
         {shifts.map(s=>(
-          <button key={s.id} className="btn" onClick={()=>onPick(s.id)} style={{width:"100%",display:"flex",alignItems:"center",gap:8,padding:"8px 10px",borderRadius:6,marginBottom:3,border:`1px solid ${s.color}22`,background:`${s.color}07`,textAlign:"left"}}>
+          <button key={s.id} className="btn" onClick={()=>onPick(s.id)} style={{width:"100%",display:"flex",alignItems:"center",gap:8,padding:"8px 10px",borderRadius:6,marginBottom:3,border:`1px solid ${s.color}33`,background:`${s.color}11`,textAlign:"left"}}>
             <div style={{width:6,height:6,borderRadius:"50%",background:s.color,flexShrink:0}}/>
-            <div><div style={{fontSize:12,fontWeight:600,color:s.color}}>{s.name}</div><div style={{fontSize:10,color:"#AAA"}}>{s.start}–{s.end} · {shiftH(s).toFixed(1)}h</div></div>
+            <div><div style={{fontSize:12,fontWeight:600,color:dark?lighten(s.color):darken(s.color)}}>{s.name}</div><div style={{fontSize:10,color:D.text2}}>{s.start}–{s.end} · {shiftH(s).toFixed(1)}h</div></div>
           </button>
         ))}
         <span className="lbl" style={{marginTop:14}}>Estados</span>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:5,marginBottom:14}}>
           {Object.values(SPECIAL).map(st=>(
-            <button key={st.id} className="btn" onClick={()=>onPick(st.id)} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 9px",borderRadius:6,border:`1px solid ${st.border}`,background:st.bg,textAlign:"left"}}>
-              <span style={{fontSize:10,fontWeight:700,color:st.color,width:13,textAlign:"center"}}>{st.sym}</span>
-              <div><div style={{fontSize:11,fontWeight:500,color:st.color}}>{st.label}</div>{st.hidden&&<div style={{fontSize:9,color:"#CCC"}}>interno</div>}</div>
+            <button key={st.id} className="btn" onClick={()=>onPick(st.id)} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 9px",borderRadius:6,border:`1px solid ${dark?st.color+"44":st.border}`,background:dark?`${st.color}22`:st.bg,textAlign:"left"}}>
+              <div><div style={{fontSize:11,fontWeight:500,color:st.color}}>{st.label}</div></div>
             </button>
           ))}
         </div>
-        <button className="btn" onClick={onClose} style={{width:"100%",background:"#F3F4F6",color:"#555",padding:"8px",borderRadius:6,fontSize:13}}>Cancelar</button>
+        <button className="btn" onClick={onClose} style={{width:"100%",background:D.bg3,color:D.text,padding:"8px",borderRadius:6,fontSize:13}}>Cancelar</button>
       </div>
     </div>
   );
 }
 
-function UserModal({ initial, isFixed, onSave, onClose }) {
+function UserModal({ initial, isFixed, dark, onSave, onClose }) {
+  const D=getD(dark);
   const [name,setName]=useState(initial?.name||""); const [role,setRole]=useState(initial?.role||"");
   const [area,setArea]=useState(initial?.area||"Cocina"); const [color,setColor]=useState(initial?.color||PALETTE[0]);
   return (
-    <div className="modal-bg" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()}>
-      <div style={{fontSize:15,fontWeight:700,marginBottom:20}}>{initial?"Editar persona":"Nueva persona"}</div>
+    <div className="modal-bg" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()} style={{background:D.bg2,border:`1px solid ${D.border}`}}>
+      <div style={{fontSize:15,fontWeight:700,color:D.text,marginBottom:20}}>{initial?"Editar persona":"Nueva persona"}</div>
       <span className="lbl">Nombre</span><input value={name} onChange={e=>setName(e.target.value)} placeholder="Nombre completo" autoFocus disabled={isFixed&&!initial?.name?.includes("test")}/>
       <span className="lbl">Cargo</span><input value={role} onChange={e=>setRole(e.target.value)} placeholder="Ej: Cajera, Cocinera..."/>
       <span className="lbl">Área</span><select value={area} onChange={e=>setArea(e.target.value)} disabled={isFixed}>{AREAS.map(a=><option key={a} value={a}>{a}</option>)}</select>
       <span className="lbl">Color</span>
       <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:6}}>
-        {PALETTE.map(c=><button key={c} className="btn" onClick={()=>setColor(c)} style={{width:22,height:22,borderRadius:"50%",background:c,border:color===c?"2.5px solid #111":"2px solid transparent",outline:color===c?"2px solid #fff":"none",outlineOffset:"-4px"}}/>)}
+        {PALETTE.map(c=><button key={c} className="btn" onClick={()=>setColor(c)} style={{width:22,height:22,borderRadius:"50%",background:c,border:color===c?`2.5px solid ${D.text}`:"2px solid transparent",outline:color===c?`2px solid ${D.bg2}`:"none",outlineOffset:"-4px"}}/>)}
       </div>
       <div style={{display:"flex",gap:8,marginTop:22}}>
-        <button className="btn" onClick={onClose} style={{flex:1,background:"#F3F4F6",color:"#555",padding:"9px",borderRadius:6,fontSize:13}}>Cancelar</button>
-        <button className="btn" onClick={()=>{if(name.trim()) onSave({name:name.trim(),role:role.trim(),area,color});}} style={{flex:1,background:"#111",color:"#fff",padding:"9px",borderRadius:6,fontSize:13,fontWeight:500}}>{initial?"Guardar":"Agregar"}</button>
+        <button className="btn" onClick={onClose} style={{flex:1,background:D.bg3,color:D.text,padding:"9px",borderRadius:6,fontSize:13}}>Cancelar</button>
+        <button className="btn" onClick={()=>{if(name.trim()) onSave({name:name.trim(),role:role.trim(),area,color});}} style={{flex:1,background:D.tabActive,color:D.tabActiveText,padding:"9px",borderRadius:6,fontSize:13,fontWeight:500}}>{initial?"Guardar":"Agregar"}</button>
       </div>
     </div></div>
   );
 }
 
-function ShiftModal({ initial, onSave, onClose }) {
+function ShiftModal({ initial, dark, onSave, onClose }) {
+  const D=getD(dark);
   const [name,setName]=useState(initial?.name||""); const [start,setStart]=useState(initial?.start||"09:00");
   const [end,setEnd]=useState(initial?.end||"18:30"); const [color,setColor]=useState(initial?.color||PALETTE[0]);
   const dur=start&&end?shiftH({start,end}):0, over=dur>RULES.MAX_DAY_H;
   return (
-    <div className="modal-bg" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()}>
-      <div style={{fontSize:15,fontWeight:700,marginBottom:20}}>{initial?"Editar turno":"Nuevo turno"}</div>
+    <div className="modal-bg" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()} style={{background:D.bg2,border:`1px solid ${D.border}`}}>
+      <div style={{fontSize:15,fontWeight:700,color:D.text,marginBottom:20}}>{initial?"Editar turno":"Nuevo turno"}</div>
       <span className="lbl">Nombre</span><input value={name} onChange={e=>setName(e.target.value)} placeholder="Ej: AM Apertura" autoFocus/>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
         <div><span className="lbl">Entrada</span><input type="time" value={start} onChange={e=>setStart(e.target.value)}/></div>
@@ -1687,11 +1770,11 @@ function ShiftModal({ initial, onSave, onClose }) {
       {start&&end&&<div style={{marginTop:9,padding:"6px 10px",borderRadius:5,background:over?"#FBF0F0":"#F0F7F0",fontSize:12,color:over?"#9B2335":"#3D7A61"}}>{dur.toFixed(1)}h efectivas (−30 min){over?" ⚠ Excede 10h":" ✓"}</div>}
       <span className="lbl">Color</span>
       <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:6}}>
-        {PALETTE.map(c=><button key={c} className="btn" onClick={()=>setColor(c)} style={{width:22,height:22,borderRadius:"50%",background:c,border:color===c?"2.5px solid #111":"2px solid transparent",outline:color===c?"2px solid #fff":"none",outlineOffset:"-4px"}}/>)}
+        {PALETTE.map(c=><button key={c} className="btn" onClick={()=>setColor(c)} style={{width:22,height:22,borderRadius:"50%",background:c,border:color===c?`2.5px solid ${D.text}`:"2px solid transparent",outline:color===c?`2px solid ${D.bg2}`:"none",outlineOffset:"-4px"}}/>)}
       </div>
       <div style={{display:"flex",gap:8,marginTop:22}}>
-        <button className="btn" onClick={onClose} style={{flex:1,background:"#F3F4F6",color:"#555",padding:"9px",borderRadius:6,fontSize:13}}>Cancelar</button>
-        <button className="btn" onClick={()=>{if(name.trim()&&start&&end) onSave({name:name.trim(),start,end,color});}} style={{flex:1,background:"#111",color:"#fff",padding:"9px",borderRadius:6,fontSize:13,fontWeight:500}}>{initial?"Guardar":"Agregar"}</button>
+        <button className="btn" onClick={onClose} style={{flex:1,background:D.bg3,color:D.text,padding:"9px",borderRadius:6,fontSize:13}}>Cancelar</button>
+        <button className="btn" onClick={()=>{if(name.trim()&&start&&end) onSave({name:name.trim(),start,end,color});}} style={{flex:1,background:D.tabActive,color:D.tabActiveText,padding:"9px",borderRadius:6,fontSize:13,fontWeight:500}}>{initial?"Guardar":"Agregar"}</button>
       </div>
     </div></div>
   );
