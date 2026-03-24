@@ -754,10 +754,11 @@ export default function App() {
       )}
 
       {/* ── TAREAS ── */}
-      {tab==="tasks" && <TasksTab users={users} schedule={schedule} dark={dark} company={company} pfx={pfx} />}
+      {tab==="tasks" && <div style={{overflowY:"auto",height:"calc(100vh - 100px)"}}><TasksTab users={users} schedule={schedule} dark={dark} company={company} pfx={pfx} /></div>}
 
       {/* ── PERSONAS ── */}
       {tab==="users" && (
+        <div style={{overflowY:"auto",height:"calc(100vh - 100px)"}}>
         <div style={{maxWidth:680,margin:"32px auto",padding:"0 24px"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:24}}>
             <div><div style={{fontSize:18,fontWeight:700}}>Personas</div><div style={{fontSize:13,color:"#888",marginTop:2}}>{[...FIXED_USERS,...extra].filter(u=>!hidden.includes(u.id)).length} personas</div></div>
@@ -798,10 +799,12 @@ export default function App() {
             );
           })}
         </div>
+        </div>
       )}
 
       {/* ── TURNOS ── */}
       {tab==="shifts" && (
+        <div style={{overflowY:"auto",height:"calc(100vh - 100px)"}}>
         <div style={{maxWidth:680,margin:"32px auto",padding:"0 24px"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:24}}>
             <div><div style={{fontSize:18,fontWeight:700}}>Turnos</div><div style={{fontSize:13,color:"#888",marginTop:2}}>{shifts.length} turnos · −30 min colación</div></div>
@@ -819,6 +822,7 @@ export default function App() {
               </div>
             </div>
           ))}
+        </div>
         </div>
       )}
 
