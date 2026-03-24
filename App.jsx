@@ -244,17 +244,26 @@ export default function App() {
       if(cell){
         const [day,uid]=cell.getAttribute("data-cellkey").split("||");
         if(dragging.t==="user") setPicker({day,uid:dragging.uid});
-        else if(dragging.t==="shift") setCell_ref.current(day,uid,dragging.id);
-        else if(dragging.t==="special") setCell_ref.current(day,uid,dragging.id);
+        else {
+          setCell_ref.current(day,uid,dragging.id);
+          // If dragged from a cell (move), remove source unless same cell
+          if(dragging._srcDay && dragging._srcUid){
+            if(!(dragging._srcDay===day && dragging._srcUid===uid)){
+              delCell_ref.current(dragging._srcDay, dragging._srcUid);
+            }
+          }
+        }
       }
       setDragging(null); setGhostPos(null); setDragOver(null);
     };
-    window.addEventListener("pointermove",onMove,{passive:true});
+    window.addEventListener("pointermove",onMove);
     window.addEventListener("pointerup",onUp);
     return()=>{ window.removeEventListener("pointermove",onMove); window.removeEventListener("pointerup",onUp); };
   },[dragging]);
 
   setCell_ref.current=(day,uid,val)=>assignW(day,uid,val);
+  const delCell_ref=useRef(null);
+  delCell_ref.current=(day,uid)=>removeW(day,uid);
 
   const users = [...FIXED_USERS, ...extra];
   const visible = areaF==="Todas" ? users : users.filter(u=>u.area===areaF);
@@ -318,6 +327,7 @@ export default function App() {
   function startDrag(e,payload){
     e.preventDefault();
     e.stopPropagation();
+    try{ e.target.setPointerCapture(e.pointerId); }catch(_){}
     document.body.classList.add("is-dragging");
     setDragging(payload);
     const p=e.touches?e.touches[0]:e;
@@ -408,7 +418,7 @@ export default function App() {
     <div style={{fontFamily:"'Inter',sans-serif",background:D.bg,minHeight:"100vh",color:D.text,colorScheme:dark?"dark":"light"}}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-        *{box-sizing:border-box;margin:0;padding:0;}
+        *{box-sizing:border-box;margin:0;padding:0;user-select:none;-webkit-user-select:none;}
         ::-webkit-scrollbar{width:4px;height:4px;}
         ::-webkit-scrollbar-thumb{background:${D.scrollThumb};border-radius:4px;}
         ::-webkit-scrollbar-track{background:transparent;}
@@ -426,6 +436,7 @@ export default function App() {
         @keyframes fadeIn{from{opacity:0}to{opacity:1}}
         @keyframes slideUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
         .modal{background:${D.bg2};border-radius:14px;padding:26px;width:360px;box-shadow:0 12px 40px rgba(0,0,0,${dark?.5:.12});animation:slideUp .18s cubic-bezier(.4,0,.2,1);border:1px solid ${D.border};}
+        input,select,textarea{user-select:text;-webkit-user-select:text;}
         input,select{width:100%;padding:8px 11px;border:1px solid ${D.inputBorder};border-radius:7px;font-size:13px;font-family:'Inter',sans-serif;outline:none;color:${D.text};background:${D.input};transition:border-color .15s;}
         input:focus,select:focus{border-color:${dark?"#555":"#555"};box-shadow:0 0 0 3px rgba(${dark?"255,255,255":"0,0,0"},.06);}
         option{background:${D.bg2};color:${D.text};}
@@ -433,7 +444,8 @@ export default function App() {
         .nav-btn{background:none;border:1px solid ${D.btnBorder};border-radius:6px;padding:5px 10px;cursor:pointer;font-size:13px;color:${D.text};font-family:'Inter',sans-serif;transition:all .15s;}
         .nav-btn:hover{background:${D.bg3};border-color:${D.border2};}
         .nav-btn:active{transform:scale(.97);}
-        .wcell{transition:background .12s;cursor:pointer;position:relative;}
+        .wcell{transition:background .12s;cursor:pointer;position:relative;user-select:none;-webkit-user-drag:none;}
+        .wcell *{user-select:none;-webkit-user-drag:none;-webkit-user-select:none;}
         .wcell:hover{background:${D.cellHover}!important;}
         .drag-ov{background:${dark?"#222":"#F8F8F8"}!important;}
         .wrow td{transition:background .1s;}
@@ -452,7 +464,7 @@ export default function App() {
         .cal-cell:hover{background:${D.cellHover}!important;}
         .task-row:hover{background:${D.bg2};}
         .urow:hover{background:${D.bg2};}
-        .sb-row{display:flex;align-items:flex-start;gap:8px;padding:6px 4px;border-radius:6px;cursor:grab;transition:background .12s,transform .12s;margin-bottom:2px;user-select:none;}
+        .sb-row{display:flex;align-items:flex-start;gap:8px;padding:6px 4px;border-radius:6px;cursor:grab;transition:background .12s,transform .12s;margin-bottom:2px;user-select:none;touch-action:none;}
         .sb-row:hover{background:${D.bg3};}
         .sb-row:active{cursor:grabbing;transform:scale(.98);opacity:.7;}
         .drag-ghost{position:fixed;pointer-events:none;z-index:9999;opacity:.92;transform:rotate(1.5deg) scale(1.04);transition:none;filter:drop-shadow(0 8px 24px rgba(0,0,0,.35));animation:ghostPop .12s cubic-bezier(.4,0,.2,1);}
@@ -722,7 +734,34 @@ export default function App() {
         onClose={()=>{ setShiftModal(false); setEditShift(null); }} />}
 
       {/* ── DRAG GHOST ── */}
-      {dragging && ghostPos && (()=>{ const {label,color}=ghostLabel(dragging); return <div className="drag-ghost" style={{left:ghostPos.x-50,top:ghostPos.y-18,width:110,padding:"7px 12px",background:"#fff",border:`2px solid ${color}`,borderRadius:8,fontSize:12,fontWeight:600,color,display:"flex",alignItems:"center",gap:6,whiteSpace:"nowrap",overflow:"hidden"}}><div style={{width:8,height:8,borderRadius:"50%",background:color,flexShrink:0}}/>{label}</div>; })()}
+      {dragging && ghostPos && (()=>{
+        const d=dragging;
+        let content=null;
+        if(d.t==="user"){
+          const u=users.find(x=>x.id===d.uid);
+          content=<div style={{display:"flex",alignItems:"center",gap:7,padding:"5px 9px",background:D.bg2,border:`1px solid ${D.border}`,borderRadius:7,whiteSpace:"nowrap"}}>
+            <Av name={u?.name||"?"} color={u?.color||"#888"} size={20}/>
+            <span style={{fontSize:12,fontWeight:500,color:D.text}}>{u?.name||""}</span>
+          </div>;
+        } else if(d.t==="shift"){
+          const s=shifts.find(x=>x.id===d.id);
+          if(s){ const nc=dark?lighten(s.color):darken(s.color);
+            content=<div style={{background:dark?`${s.color}28`:`${s.color}14`,border:`1px solid ${dark?s.color+"55":`${s.color}35`}`,borderRadius:6,padding:"4px 7px",minWidth:80}}>
+              <div style={{fontSize:10,fontWeight:700,color:nc,lineHeight:1.3}}>{s.name}</div>
+              <div style={{fontSize:9,fontWeight:500,color:`${nc}99`,marginTop:1}}>{s.start}–{s.end}</div>
+            </div>;
+          }
+        } else if(d.t==="special"){
+          const st=Object.values(SPECIAL).find(x=>x.id===d.id);
+          if(st){ const sc=dark?lighten(st.color):st.color;
+            content=<div style={{background:dark?`${st.color}28`:st.bg,border:`1px solid ${dark?st.color+"55":st.border}`,borderRadius:6,padding:"4px 7px",minWidth:60}}>
+              <div style={{fontSize:10,fontWeight:600,color:sc,lineHeight:1.3}}>{st.label}</div>
+              <div style={{fontSize:9,marginTop:1}}>&nbsp;</div>
+            </div>;
+          }
+        }
+        return content ? <div className="drag-ghost" style={{left:ghostPos.x-44,top:ghostPos.y-20,pointerEvents:"none"}}>{content}</div> : null;
+      })()}
     </div>
   );
 }
@@ -789,7 +828,7 @@ function WeekGrid({ users, shifts, dates, wSched, dragging, dragOver, setPicker,
   }
 
   return (
-    <div style={{overflowX:"auto",overflowY:"auto",flex:1}} className={dragging||filling?"no-select":""}>
+    <div style={{overflowX:"auto",overflowY:"auto",flex:1}} className={dragging||filling?"no-select":""} onDragStart={e=>e.preventDefault()}>
       <table style={{borderCollapse:"collapse",width:"100%",minWidth:760}}>
         <thead>
           <tr style={{background:D.tableHead}}>
@@ -837,13 +876,26 @@ function WeekGrid({ users, shifts, dates, wSched, dragging, dragOver, setPicker,
                   data-cellkey={`${day}||${u.id}`}
                   data-fillkey="1" data-filluid={u.id} data-fillidx={di}
                   onClick={()=>{ if(!dragging && !filling && !val) setPicker({day,uid:u.id}); }}
-                  style={{padding:"4px 4px",borderRadius:isOver?6:0,borderLeft:`1px solid ${D.border}`,cursor:"pointer",background:isFillHighlight?(dark?"#252525":"#F5F5F5"):D.cell}}>
-                  <div style={{position:"relative",minHeight:38}} className={val?"cell-filled":""}>
+                  style={{padding:"4px 4px",borderRadius:isOver?6:0,borderLeft:`1px solid ${D.border}`,cursor:val?"grab":"pointer",background:isFillHighlight?(dark?"#252525":"#F5F5F5"):D.cell}}>
+                  <div style={{position:"relative",minHeight:38}} className={val?"cell-filled":""}
+                    onPointerDown={val?e=>{
+                      // Only start move drag if not clicking the rm button or fill handle
+                      if(e.target.closest(".rm")||e.target.closest(".fill-handle")) return;
+                      e.preventDefault(); e.stopPropagation();
+                      // Determine drag type based on val
+                      const dragPayload = isSpec(val)
+                        ? {t:"special", id:val}
+                        : {t:"shift", id:val};
+                      // Remove from source on drop — store source info
+                      dragPayload._srcDay = day;
+                      dragPayload._srcUid = u.id;
+                      startDrag(e, dragPayload);
+                    }:undefined}>
                     {isOver && <div className="cell-drop-hint"/>}
                     <CellTag val={val} shifts={shifts} dark={dark}/>
-                    {val && !isSpec(val) && (
+                    {val && (
                       <div
-                        onPointerDown={e=>startFill(e, u.id, day, val)}
+                        onPointerDown={e=>{ e.stopPropagation(); startFill(e, u.id, day, val); }}
                         style={{position:"absolute",bottom:2,right:2,width:14,height:10,cursor:"crosshair",zIndex:4,background:"transparent"}}
                         className="fill-handle"
                       />
@@ -1674,7 +1726,7 @@ function CellTag({ val, shifts, dark }) {
   if(!val) return null;
   if(isSpec(val)){
     const st=getSpec(val);
-    return <div style={{background:dark?`${st.color}28`:st.bg,border:`1px solid ${dark?st.color+"55":st.border}`,borderRadius:6,padding:"4px 7px"}}>
+    return <div draggable="false" style={{background:dark?`${st.color}28`:st.bg,border:`1px solid ${dark?st.color+"55":st.border}`,borderRadius:6,padding:"4px 7px",userSelect:"none"}}>
       <div style={{fontSize:10,fontWeight:600,color:dark?lighten(st.color):st.color,lineHeight:1.3}}>{st.label}</div>
       <div style={{fontSize:9,marginTop:1}}>&nbsp;</div>
     </div>;
@@ -1683,7 +1735,7 @@ function CellTag({ val, shifts, dark }) {
   if(!s) return null;
   const nameColor = dark ? lighten(s.color) : darken(s.color);
   const timeColor = dark ? `${lighten(s.color)}BB` : `${darken(s.color)}99`;
-  return <div style={{background:dark?`${s.color}28`:`${s.color}14`,border:`1px solid ${dark?s.color+"55":`${s.color}35`}`,borderRadius:6,padding:"4px 7px"}}>
+  return <div draggable="false" style={{background:dark?`${s.color}28`:`${s.color}14`,border:`1px solid ${dark?s.color+"55":`${s.color}35`}`,borderRadius:6,padding:"4px 7px",userSelect:"none"}}>
     <div style={{fontSize:10,fontWeight:700,color:nameColor,lineHeight:1.3}}>{s.name}</div>
     <div style={{fontSize:9,fontWeight:500,color:timeColor,marginTop:1}}>{s.start}–{s.end}</div>
   </div>;
