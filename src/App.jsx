@@ -1,4 +1,3 @@
-
 import { useState, useEffect, useRef } from "react";
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
@@ -564,8 +563,13 @@ export default function App() {
       `}</style>
 
       {/* ── NAV ── */}
-      <div style={{borderBottom:`1px solid ${D.navBorder}`,padding:"0 20px",display:"flex",alignItems:"center",gap:14,height:50,background:D.nav}}>
-        <span style={{fontWeight:700,fontSize:14,letterSpacing:"-0.4px",color:D.text}}>{company.name}</span>
+      <div style={{borderBottom:`1px solid ${D.navBorder}`,padding:"0 20px",display:"flex",alignItems:"center",gap:10,height:50,background:D.nav}}>
+        <span style={{fontWeight:700,fontSize:14,letterSpacing:"-0.4px",color:D.text,marginRight:6}}>{company.name}</span>
+        <div style={{display:"flex",gap:2}}>
+          {[["schedule","Horario"],["tasks","Tareas"],["users","Personas"],["shifts","Turnos"]].map(([t,l])=>(
+            <button key={t} className={`tab ${tab===t?"active":""}`} onClick={()=>setTab(t)}>{l}</button>
+          ))}
+        </div>
         <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:5}}>
           {/* Company toggle */}
           <button className="btn" onClick={()=>switchCompany(companyId==="sf"?"mf":"sf")}
@@ -627,55 +631,13 @@ export default function App() {
         </div>
       </div>
 
-      {/* ── SUBNAV (always visible) ── */}
-      <div style={{padding:"8px 16px",borderBottom:`1px solid ${D.border}`,display:"flex",alignItems:"center",gap:9,flexShrink:0,paddingLeft:tab==="schedule"?44:16,background:D.bg}}>
-        {/* Tabs */}
-        <div style={{display:"flex",gap:2,marginRight:8}}>
-          {[["schedule","Horario"],["tasks","Tareas"],["users","Personas"],["shifts","Turnos"]].map(([t,l])=>(
-            <button key={t} className={`tab ${tab===t?"active":""}`} onClick={()=>setTab(t)}
-              style={{padding:"4px 10px",fontSize:12}}>{l}</button>
-          ))}
-        </div>
-        {tab==="schedule" && <>
-          <div style={{width:1,height:18,background:D.border,flexShrink:0}}/>
-          <div style={{background:D.bg3,borderRadius:6,padding:3,display:"flex",gap:1}}>
-            <button className={`vtab ${view==="week"?"active":""}`} onClick={()=>setView("week")}>WK</button>
-            <button className={`vtab ${view==="month"?"active":""}`} onClick={()=>setView("month")}>Mes</button>
-          </div>
-          {view==="week" && <>
-            <button className="nav-btn" onClick={()=>setWo(w=>w-1)}>‹</button>
-            <span style={{fontSize:13,fontWeight:500,color:D.text,minWidth:158,textAlign:"center"}}>{weekLabel(wo)}</span>
-            <button className="nav-btn" onClick={()=>setWo(w=>w+1)}>›</button>
-            <button className="nav-btn" onClick={()=>setWo(0)} style={{fontSize:11,color:D.text2,background:wo===0?D.bg3:"none"}}>Hoy</button>
-          </>}
-          {view==="month" && <>
-            <button className="nav-btn" onClick={()=>setMonthRef(m=>{ const d=new Date(m.y,m.m-1,1); return{y:d.getFullYear(),m:d.getMonth()}; })}>‹</button>
-            <span style={{fontSize:13,fontWeight:500,color:D.text,minWidth:130,textAlign:"center"}}>{MONTH_NAMES[monthRef.m]} {monthRef.y}</span>
-            <button className="nav-btn" onClick={()=>setMonthRef(m=>{ const d=new Date(m.y,m.m+1,1); return{y:d.getFullYear(),m:d.getMonth()}; })}>›</button>
-            <button className="nav-btn" onClick={()=>{ const n=new Date(); setMonthRef({y:n.getFullYear(),m:n.getMonth()}); }} style={{fontSize:11,color:D.text2,background:(()=>{const n=new Date();return monthRef.m===n.getMonth()&&monthRef.y===n.getFullYear()?D.bg3:"none";})()}}>Hoy</button>
-          </>}
-          <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:8}}>
-            <div style={{display:"flex",gap:2,background:D.bg3,borderRadius:6,padding:3}}>
-              {["Todas",...company.areas].map(a=>(
-                <button key={a} className={`atab ${areaF===a?"active":""}`} onClick={()=>setAreaF(a)}>{a}</button>
-              ))}
-            </div>
-            <button className="nav-btn" onClick={()=>setReportModal(true)} title="Generar reporte"
-              style={{fontSize:11,color:D.text2,display:"flex",alignItems:"center",gap:4}}>
-              <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect x=".5" y=".5" width="12" height="12" rx="2" stroke={D.text2}/><line x1="3" y1="4" x2="10" y2="4" stroke={D.text2} strokeWidth="1.2"/><line x1="3" y1="6.5" x2="10" y2="6.5" stroke={D.text2} strokeWidth="1.2"/><line x1="3" y1="9" x2="7" y2="9" stroke={D.text2} strokeWidth="1.2"/></svg>
-              Reporte
-            </button>
-          </div>
-        </>}
-      </div>
-
       {tab==="schedule" && (
-        <div style={{display:"flex",height:"calc(100vh - 100px)",position:"relative"}}>
+        <div style={{display:"flex",height:"calc(100vh - 50px)",position:"relative"}}>
 
           {/* Sidebar toggle button */}
           <button className="btn" onClick={()=>setSidebarOpen(o=>!o)}
             title={sidebarOpen?"Ocultar panel":"Mostrar panel"}
-            style={{position:"absolute",left:sidebarOpen?168:8,top:12,zIndex:20,width:20,height:20,borderRadius:"50%",background:D.bg2,border:`1px solid ${D.border2}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,color:D.text2,boxShadow:`0 1px 4px rgba(0,0,0,${dark?.3:.1})`,transition:"left .2s",padding:0,flexShrink:0}}>
+            style={{position:"absolute",left:sidebarOpen?168:8,top:66,zIndex:20,width:20,height:20,borderRadius:"50%",background:D.bg2,border:`1px solid ${D.border2}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,color:D.text2,boxShadow:`0 1px 4px rgba(0,0,0,${dark?.3:.1})`,transition:"left .2s",padding:0,flexShrink:0}}>
             {sidebarOpen?"‹":"›"}
           </button>
 
@@ -739,6 +701,36 @@ export default function App() {
 
           {/* Main */}
           <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:D.bg}}>
+            <div style={{padding:"8px 16px",borderBottom:`1px solid ${D.border}`,display:"flex",alignItems:"center",gap:9,flexShrink:0,paddingLeft:44,background:D.bg}}>
+              <div style={{background:D.bg3,borderRadius:6,padding:3,display:"flex",gap:1}}>
+                <button className={`vtab ${view==="week"?"active":""}`} onClick={()=>setView("week")}>WK</button>
+                <button className={`vtab ${view==="month"?"active":""}`} onClick={()=>setView("month")}>Mes</button>
+              </div>
+              {view==="week" && <>
+                <button className="nav-btn" onClick={()=>setWo(w=>w-1)}>‹</button>
+                <span style={{fontSize:13,fontWeight:500,color:D.text,minWidth:158,textAlign:"center"}}>{weekLabel(wo)}</span>
+                <button className="nav-btn" onClick={()=>setWo(w=>w+1)}>›</button>
+                <button className="nav-btn" onClick={()=>setWo(0)} style={{fontSize:11,color:D.text2,background:wo===0?D.bg3:"none"}}>Hoy</button>
+              </>}
+              {view==="month" && <>
+                <button className="nav-btn" onClick={()=>setMonthRef(m=>{ const d=new Date(m.y,m.m-1,1); return{y:d.getFullYear(),m:d.getMonth()}; })}>‹</button>
+                <span style={{fontSize:13,fontWeight:500,color:D.text,minWidth:130,textAlign:"center"}}>{MONTH_NAMES[monthRef.m]} {monthRef.y}</span>
+                <button className="nav-btn" onClick={()=>setMonthRef(m=>{ const d=new Date(m.y,m.m+1,1); return{y:d.getFullYear(),m:d.getMonth()}; })}>›</button>
+                <button className="nav-btn" onClick={()=>{ const n=new Date(); setMonthRef({y:n.getFullYear(),m:n.getMonth()}); }} style={{fontSize:11,color:D.text2,background:(()=>{const n=new Date();return monthRef.m===n.getMonth()&&monthRef.y===n.getFullYear()?D.bg3:"none";})()}}>Hoy</button>
+              </>}
+              <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:8}}>
+                <div style={{display:"flex",gap:2,background:D.bg3,borderRadius:6,padding:3}}>
+                  {["Todas",...company.areas].map(a=>(
+                    <button key={a} className={`atab ${areaF===a?"active":""}`} onClick={()=>setAreaF(a)}>{a}</button>
+                  ))}
+                </div>
+                <button className="nav-btn" onClick={()=>setReportModal(true)} title="Generar reporte"
+                  style={{fontSize:11,color:D.text2,display:"flex",alignItems:"center",gap:4}}>
+                  <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect x=".5" y=".5" width="12" height="12" rx="2" stroke={D.text2}/><line x1="3" y1="4" x2="10" y2="4" stroke={D.text2} strokeWidth="1.2"/><line x1="3" y1="6.5" x2="10" y2="6.5" stroke={D.text2} strokeWidth="1.2"/><line x1="3" y1="9" x2="7" y2="9" stroke={D.text2} strokeWidth="1.2"/></svg>
+                  Reporte
+                </button>
+              </div>
+            </div>
 
             {view==="week"
               ? <WeekGrid users={visible} shifts={shifts} dates={dates} wSched={wSched}
@@ -755,11 +747,10 @@ export default function App() {
       )}
 
       {/* ── TAREAS ── */}
-      {tab==="tasks" && <div style={{overflowY:"auto",height:"calc(100vh - 100px)"}}><TasksTab users={users} schedule={schedule} dark={dark} company={company} pfx={pfx} /></div>}
+      {tab==="tasks" && <TasksTab users={users} schedule={schedule} dark={dark} company={company} pfx={pfx} />}
 
       {/* ── PERSONAS ── */}
       {tab==="users" && (
-        <div style={{overflowY:"auto",height:"calc(100vh - 100px)"}}>
         <div style={{maxWidth:680,margin:"32px auto",padding:"0 24px"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:24}}>
             <div><div style={{fontSize:18,fontWeight:700}}>Personas</div><div style={{fontSize:13,color:"#888",marginTop:2}}>{[...FIXED_USERS,...extra].filter(u=>!hidden.includes(u.id)).length} personas</div></div>
@@ -800,12 +791,9 @@ export default function App() {
             );
           })}
         </div>
-        </div>
       )}
-
-      {/* ── TURNOS ── */}
       {tab==="shifts" && (
-        <div style={{overflowY:"auto",height:"calc(100vh - 100px)"}}>
+        <>
         <div style={{maxWidth:680,margin:"32px auto",padding:"0 24px"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:24}}>
             <div><div style={{fontSize:18,fontWeight:700}}>Turnos</div><div style={{fontSize:13,color:"#888",marginTop:2}}>{shifts.length} turnos · −30 min colación</div></div>
@@ -824,7 +812,6 @@ export default function App() {
             </div>
           ))}
         </div>
-</div>
       </>
       )}
 
