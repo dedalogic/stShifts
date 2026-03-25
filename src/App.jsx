@@ -2063,223 +2063,179 @@ function WizardModal({ dark, onClose, onComplete }) {
   const D = getD(dark);
   const COLORS = ["#4B6CB7","#2E7D8C","#5A7A5A","#7A5A8C","#8C6A3A","#3A6A8C","#6A3A5A","#5A8C6A","#8C3A3A","#6A5A3A","#3A8C6A","#8C7A3A"];
 
-  // Steps: 0=coName, 1=total, 2=numAreas,
-  //        3+2i = areaName[i], 3+2i+1 = areaCount[i] (last area skips count)
-  //        finalStep = loading
-  const [step, setStep]         = useState(0);
-  const [coName, setCoName]     = useState("");
-  const [total, setTotal]       = useState("");
-  const [numAreas, setNumAreas] = useState("");
-  const [areaData, setAreaData] = useState([]); // [{name, count}]
-  const [curVal, setCurVal]     = useState("");
-  const [loadPct, setLoadPct]   = useState(0);
-  const [done, setDone]         = useState(false);
+  // Simple named phase: "name" | "total" | "numAreas" | "areaName_N" | "areaCount_N" | "loading"
+  const [phase, setPhase]     = useState("name");
+  const [coName, setCoName]   = useState("");
+  const [total, setTotal]     = useState(0);
+  const [numAreas, setNumAreas] = useState(0);
+  const [curAreaIdx, setCurAreaIdx] = useState(0);
+  const [areas, setAreas]     = useState([]); // [{name, count}]
+  const [curVal, setCurVal]   = useState("");
+  const [loadPct, setLoadPct] = useState(0);
+  const [done, setDone]       = useState(false);
 
-  const totalNum    = parseInt(total)    || 0;
-  const numAreasNum = parseInt(numAreas) || 0;
+  const usedCount = areas.reduce((s,a) => s + (a.count||0), 0);
+  const leftover  = total - usedCount;
+  const isLastArea = curAreaIdx === numAreas - 1;
 
-  // From step 3 onward: alternating name/count for each area
-  // step 3       = name of area 0
-  // step 4       = count of area 0  (skipped if last area)
-  // step 5       = name of area 1
-  // step 6       = count of area 1  (skipped if last area)
-  // ...
-  // finalStep = 3 + numAreasNum*2 - (last area has no count step) = 3 + numAreasNum*2 - 1
-  const firstAreaStep = 3;
-  const stepsPerArea  = 2;
-  // For area i: nameStep = 3 + i*2, countStep = 3 + i*2 + 1
-  // Last area (i = numAreasNum-1) has no count step
-  const finalStep = numAreasNum > 0
-    ? firstAreaStep + (numAreasNum - 1) * stepsPerArea + 1  // last area only has name
-    : firstAreaStep;
+  // Progress 0-100
+  const totalPhases = 3 + numAreas * 2;
+  const phaseIndex =
+    phase==="name"    ? 0 :
+    phase==="total"   ? 1 :
+    phase==="numAreas"? 2 :
+    phase==="loading" ? totalPhases :
+    phase.startsWith("areaName_")  ? 3 + parseInt(phase.split("_")[1])*2 :
+    phase.startsWith("areaCount_") ? 4 + parseInt(phase.split("_")[1])*2 : 0;
+  const progress = phase==="loading" ? loadPct : Math.round(phaseIndex/Math.max(totalPhases,1)*100);
 
-  const isNameStep  = step >= firstAreaStep && (step - firstAreaStep) % 2 === 0 && step < firstAreaStep + numAreasNum * 2;
-  const isCountStep = step >= firstAreaStep && (step - firstAreaStep) % 2 === 1 && step < firstAreaStep + numAreasNum * 2;
-  const areaIdx     = isNameStep || isCountStep ? Math.floor((step - firstAreaStep) / 2) : -1;
-  const isLastArea  = areaIdx === numAreasNum - 1;
-  const isLoading   = step === finalStep;
-
-  const usedCounts  = areaData.reduce((s, a) => s + (parseInt(a.count) || 0), 0);
-  const leftover    = totalNum - usedCounts;
-
-  const totalStepCount = finalStep;
-  const progress = isLoading ? loadPct : Math.round((step / Math.max(totalStepCount, 1)) * 100);
-
-  function startLoading() {
+  function startLoading(finalAreas) {
+    setPhase("loading"); setLoadPct(0);
     let pct = 0;
-    const iv = setInterval(() => {
-      pct += 2;
-      setLoadPct(Math.min(pct, 100));
-      if (pct >= 100) {
-        clearInterval(iv);
-        setDone(true);
-        setTimeout(() => onComplete(buildCompany()), 800);
-      }
+    const iv = setInterval(()=>{
+      pct += 2; setLoadPct(Math.min(pct,100));
+      if(pct>=100){ clearInterval(iv); setDone(true); setTimeout(()=>onComplete(build(finalAreas)),800); }
     }, 60);
   }
 
-  function buildCompany() {
-    const id = "co_" + coName.toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "") + "_" + Date.now();
-    const fixedUsers = [];
-    let idx = 0;
-    areaData.forEach((a) => {
-      const ct = parseInt(a.count) || 0;
-      for (let i = 0; i < ct; i++) {
-        fixedUsers.push({ id: `${id}_u${idx}`, name: `${a.name} ${i+1}`, role: "Full Time", area: a.name, color: COLORS[idx % COLORS.length], contractType: "ft" });
+  function build(finalAreas) {
+    const id = "co_"+coName.toLowerCase().replace(/\s+/g,"_").replace(/[^a-z0-9_]/g,"")+"_"+Date.now();
+    const fixedUsers=[]; let idx=0;
+    finalAreas.forEach(a=>{
+      for(let i=0;i<(a.count||0);i++){
+        fixedUsers.push({id:`${id}_u${idx}`,name:`${a.name} ${i+1}`,role:"Full Time",area:a.name,color:COLORS[idx%COLORS.length],contractType:"ft"});
         idx++;
       }
     });
-    return { id, name: coName, prefix: id + "_", areas: areaData.map(a => a.name), fixedUsers,
-      rotationOrder: fixedUsers.filter(u => u.area === areaData[0]?.name).map(u => u.id),
-      rotatingTasks: [], fixedTasks: [], anchorTaskOffset: 0,
-      hasPlancha: false, planchaExclude: null, kitchenArea: areaData[0]?.name || "" };
+    return {id,name:coName,prefix:id+"_",areas:finalAreas.map(a=>a.name),fixedUsers,
+      rotationOrder:fixedUsers.filter(u=>u.area===finalAreas[0]?.name).map(u=>u.id),
+      rotatingTasks:[],fixedTasks:[],anchorTaskOffset:0,hasPlancha:false,planchaExclude:null,kitchenArea:finalAreas[0]?.name||""};
   }
 
   function next() {
     const v = curVal.trim();
-    if (step === 0) { if (v) { setCurVal(""); setStep(1); } return; }
-    if (step === 1) { if (parseInt(curVal) > 0) { setCurVal(""); setStep(2); } return; }
-    if (step === 2) { if (parseInt(curVal) > 0) { setCurVal(""); setStep(3); } return; }
 
-    if (isNameStep) {
-      const name = v || `Puesto ${areaIdx + 1}`;
-      const updated = [...areaData];
-      updated[areaIdx] = { name, count: updated[areaIdx]?.count || 0 };
-      setAreaData(updated);
-      setCurVal("");
-      if (isLastArea) {
-        // auto assign count and go to loading
-        updated[areaIdx] = { name, count: leftover };
-        setAreaData(updated);
-        setStep(finalStep);
-        startLoading();
+    if(phase==="name"){
+      if(!v) return;
+      setCoName(v); setCurVal(""); setPhase("total");
+      return;
+    }
+    if(phase==="total"){
+      const n=parseInt(curVal); if(!n||n<1) return;
+      setTotal(n); setCurVal(""); setPhase("numAreas");
+      return;
+    }
+    if(phase==="numAreas"){
+      const n=parseInt(curVal); if(!n||n<1) return;
+      setNumAreas(n); setAreas([]); setCurAreaIdx(0); setCurVal("");
+      setPhase("areaName_0");
+      return;
+    }
+    if(phase.startsWith("areaName_")){
+      const i=parseInt(phase.split("_")[1]);
+      const name=v||`Puesto ${i+1}`;
+      const newAreas=[...areas]; newAreas[i]={name,count:0};
+      setAreas(newAreas); setCurVal("");
+      if(i===numAreas-1){
+        // last area — auto count
+        const used=newAreas.slice(0,i).reduce((s,a)=>s+(a.count||0),0);
+        const cnt=total-used;
+        newAreas[i]={name,count:cnt};
+        setAreas(newAreas);
+        startLoading(newAreas);
       } else {
-        setStep(step + 1); // go to count step
+        setCurAreaIdx(i); setPhase(`areaCount_${i}`);
       }
       return;
     }
-
-    if (isCountStep) {
-      const count = parseInt(curVal) || 0;
-      if (count <= 0) return;
-      const updated = [...areaData];
-      updated[areaIdx] = { ...updated[areaIdx], count };
-      setAreaData(updated);
-      setCurVal("");
-      setStep(step + 1); // go to next area name step
+    if(phase.startsWith("areaCount_")){
+      const i=parseInt(phase.split("_")[1]);
+      const cnt=parseInt(curVal); if(!cnt||cnt<1) return;
+      const newAreas=[...areas]; newAreas[i]={...newAreas[i],count:cnt};
+      setAreas(newAreas); setCurAreaIdx(i+1); setCurVal("");
+      setPhase(`areaName_${i+1}`);
       return;
     }
   }
 
   function back() {
-    if (step === 0) return;
     setCurVal("");
-    setStep(s => s - 1);
+    if(phase==="total")       { setPhase("name"); return; }
+    if(phase==="numAreas")    { setPhase("total"); return; }
+    if(phase==="areaName_0")  { setPhase("numAreas"); return; }
+    if(phase.startsWith("areaCount_")){ const i=parseInt(phase.split("_")[1]); setPhase(`areaName_${i}`); return; }
+    if(phase.startsWith("areaName_")) { const i=parseInt(phase.split("_")[1]); if(i>0) setPhase(`areaCount_${i-1}`); return; }
   }
 
-  // Determine question
-  const question = (() => {
-    if (step === 0) return "¿Cómo se llama tu empresa?";
-    if (step === 1) return `¿Cuántas personas trabajan en ${coName}?`;
-    if (step === 2) return "¿Cuántas áreas o puestos distintos tiene?";
-    if (isNameStep) {
-      if (areaIdx === 0) return "¿Cómo se llama el primer puesto?";
-      if (isLastArea) return `¿Cómo se llama el último puesto?`;
-      return `¿Cómo se llama el siguiente puesto?`;
-    }
-    if (isCountStep) {
-      return `¿Cuántas personas trabajan en ${areaData[areaIdx]?.name || "ese puesto"}?`;
-    }
-    return "";
-  })();
+  const question =
+    phase==="name"    ? "¿Cómo se llama tu empresa?" :
+    phase==="total"   ? `¿Cuántas personas trabajan en ${coName}?` :
+    phase==="numAreas"? "¿Cuántas áreas o puestos distintos tiene?" :
+    phase.startsWith("areaName_") ? (()=>{
+      const i=parseInt(phase.split("_")[1]);
+      if(i===0) return "¿Cómo se llama el primer puesto?";
+      if(i===numAreas-1) return "¿Cómo se llama el último puesto?";
+      return `¿Cómo se llama el puesto ${i+1}?`;
+    })() :
+    phase.startsWith("areaCount_") ? (()=>{
+      const i=parseInt(phase.split("_")[1]);
+      return `¿Cuántas personas trabajan en ${areas[i]?.name||"ese puesto"}?`;
+    })() : "";
 
-  const hint = (() => {
-    if (step === 2) return "Ej: Cocina y Caja serían 2";
-    if (isNameStep && isLastArea) return `Se asignan ${leftover} personas automáticamente`;
-    if (isCountStep) {
-      const rem = leftover;
-      return `Quedan ${rem} personas por asignar`;
-    }
-    return "";
-  })();
+  const hint =
+    phase==="numAreas" ? "Ej: Cocina y Caja serían 2" :
+    phase.startsWith("areaName_") && parseInt(phase.split("_")[1])===numAreas-1 ? `Se asignan ${leftover} personas automáticamente` :
+    phase.startsWith("areaCount_") ? `Quedan ${leftover} personas por asignar` : "";
 
-  const canContinue = (() => {
-    if (step === 0) return curVal.trim().length > 0;
-    if (step === 1) return parseInt(curVal) > 0;
-    if (step === 2) return parseInt(curVal) > 0;
-    if (isNameStep) return true; // can be empty, we auto-name
-    if (isCountStep) return parseInt(curVal) > 0;
-    return false;
-  })();
-
-  // Sync coName/total/numAreas from curVal when moving forward
-  // We store answers inline in state before moving
-  const handleCurValChange = (v) => {
-    setCurVal(v);
-    if (step === 0) setCoName(v);
-    if (step === 1) setTotal(v);
-    if (step === 2) setNumAreas(v);
-  };
-
-  const inputType = (step === 1 || step === 2 || isCountStep) ? "number" : "text";
+  const inputType = (phase==="total"||phase==="numAreas"||phase.startsWith("areaCount_")) ? "number" : "text";
+  const canContinue =
+    phase==="name"     ? curVal.trim().length>0 :
+    phase==="total"    ? parseInt(curVal)>0 :
+    phase==="numAreas" ? parseInt(curVal)>0 :
+    phase.startsWith("areaName_") ? true :
+    phase.startsWith("areaCount_") ? parseInt(curVal)>0 : false;
 
   return (
     <div className="modal-bg" onClick={onClose}>
-      <div className="modal" onClick={e => e.stopPropagation()}
-        style={{width: 400, background: D.bg2, border: `1px solid ${D.border}`, padding: 0, overflow: "hidden"}}>
-
-        {/* Header */}
-        <div style={{padding: "14px 18px 10px", borderBottom: `1px solid ${D.border}`, display: "flex", alignItems: "center", justifyContent: "space-between"}}>
-          <span style={{fontSize: 14, fontWeight: 600, color: D.text}}>Nueva empresa</span>
-          <button className="btn" onClick={onClose} style={{background: "none", color: D.text2, fontSize: 17, padding: "2px 6px", lineHeight: 1}}>×</button>
+      <div className="modal" onClick={e=>e.stopPropagation()}
+        style={{width:400,background:D.bg2,border:`1px solid ${D.border}`,padding:0,overflow:"hidden"}}>
+        <div style={{padding:"14px 18px 10px",borderBottom:`1px solid ${D.border}`,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <span style={{fontSize:14,fontWeight:600,color:D.text}}>Nueva empresa</span>
+          <button className="btn" onClick={onClose} style={{background:"none",color:D.text2,fontSize:17,padding:"2px 6px",lineHeight:1}}>×</button>
         </div>
-
-        {/* Progress */}
-        <div style={{height: 3, background: D.border}}>
-          <div style={{height: 3, background: D.tabActive, width: `${progress}%`, transition: "width .4s", borderRadius: 3}}/>
+        <div style={{height:3,background:D.border}}>
+          <div style={{height:3,background:D.tabActive,width:`${progress}%`,transition:"width .3s",borderRadius:3}}/>
         </div>
-
-        <div style={{padding: "26px 22px 22px"}}>
-          {!isLoading && <>
-            <p style={{fontSize: 16, fontWeight: 500, color: D.text, marginBottom: hint ? 6 : 18, lineHeight: 1.4}}>{question}</p>
-            {hint && <p style={{fontSize: 12, color: D.text2, marginBottom: 14}}>{hint}</p>}
-
-            <input
-              key={step}
-              autoFocus
-              value={curVal}
-              onChange={e => handleCurValChange(e.target.value)}
-              type={inputType}
-              inputMode={inputType === "number" ? "numeric" : "text"}
-              placeholder=""
-              onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter" && canContinue) next(); }}
-              style={{fontSize: 15, padding: "12px 14px", borderRadius: 8, border: `1.5px solid ${D.border}`,
-                background: D.input, color: D.text, width: "100%", outline: "none", fontFamily: "inherit"}}
-            />
-
-            <div style={{marginTop: 20, display: "flex", justifyContent: "space-between", alignItems: "center"}}>
-              {step > 0
-                ? <button className="btn" onClick={back} style={{background: "none", color: D.text2, fontSize: 13, padding: 0, border: "none"}}>← Volver</button>
+        <div style={{padding:"26px 22px 22px"}}>
+          {phase!=="loading" && <>
+            <p style={{fontSize:16,fontWeight:500,color:D.text,lineHeight:1.4,marginBottom:hint?6:18}}>{question}</p>
+            {hint && <p style={{fontSize:12,color:D.text2,marginBottom:14}}>{hint}</p>}
+            <input key={phase} autoFocus value={curVal} onChange={e=>setCurVal(e.target.value)}
+              type={inputType} inputMode={inputType==="number"?"numeric":"text"} placeholder=""
+              onKeyDown={e=>{e.stopPropagation();if(e.key==="Enter"&&canContinue)next();}}
+              style={{fontSize:15,padding:"12px 14px",borderRadius:8,border:`1.5px solid ${D.border}`,
+                background:D.input,color:D.text,width:"100%",outline:"none",fontFamily:"inherit"}}/>
+            <div style={{marginTop:20,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              {phase!=="name"
+                ? <button className="btn" onClick={back} style={{background:"none",color:D.text2,fontSize:13,padding:0,border:"none"}}>← Volver</button>
                 : <span/>}
               <button className="btn" onClick={next} disabled={!canContinue}
-                style={{padding: "9px 22px", borderRadius: 7, fontSize: 13, fontWeight: 500,
-                  background: canContinue ? D.tabActive : D.bg3,
-                  color: canContinue ? D.tabActiveText : D.text2,
-                  border: "none", opacity: canContinue ? 1 : 0.5, cursor: canContinue ? "pointer" : "default"}}>
-                {isNameStep && isLastArea ? "Crear equipo →" : "Continuar →"}
+                style={{padding:"9px 22px",borderRadius:7,fontSize:13,fontWeight:500,
+                  background:canContinue?D.tabActive:D.bg3,color:canContinue?D.tabActiveText:D.text2,
+                  border:"none",opacity:canContinue?1:.5,cursor:canContinue?"pointer":"default"}}>
+                {phase.startsWith("areaName_")&&parseInt(phase.split("_")[1])===numAreas-1?"Crear equipo →":"Continuar →"}
               </button>
             </div>
           </>}
-
-          {isLoading && <>
-            <p style={{fontSize: 15, fontWeight: 500, color: D.text, marginBottom: 20}}>
-              {done ? "¡Todo listo!" : "Perfecto, estamos creando todo..."}
+          {phase==="loading" && <>
+            <p style={{fontSize:15,fontWeight:500,color:D.text,marginBottom:20}}>
+              {done?"¡Todo listo!":"Perfecto, estamos creando todo..."}
             </p>
-            <div style={{height: 8, background: D.border, borderRadius: 4, overflow: "hidden", marginBottom: 12}}>
-              <div style={{height: 8, background: D.tabActive, width: `${loadPct}%`, transition: "width .06s", borderRadius: 4}}/>
+            <div style={{height:8,background:D.border,borderRadius:4,overflow:"hidden",marginBottom:12}}>
+              <div style={{height:8,background:D.tabActive,width:`${loadPct}%`,transition:"width .06s",borderRadius:4}}/>
             </div>
-            <p style={{fontSize: 12, color: D.text2}}>
-              {loadPct < 30 ? "Armando la estructura..." : loadPct < 65 ? "Creando los puestos..." : loadPct < 90 ? "Asignando personas..." : "¡Casi listo!"}
+            <p style={{fontSize:12,color:D.text2}}>
+              {loadPct<30?"Armando la estructura...":loadPct<65?"Creando los puestos...":loadPct<90?"Asignando personas...":"¡Casi listo!"}
             </p>
           </>}
         </div>
