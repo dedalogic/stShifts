@@ -147,7 +147,19 @@ function getFixedAssignment(weekOffset) {
   return result;
 }
 
-// ─── WEEK HELPERS ─────────────────────────────────────────────────────────────
+// Load any custom companies created via wizard
+function safeGet(key, fallback) {
+  try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch(e) { return fallback; }
+}
+function safeSet(key, val) {
+  try { localStorage.setItem(key, JSON.stringify(val)); } catch(e) {}
+}
+(function(){
+  try {
+    const custom = safeGet("so_custom_companies", []);
+    custom.forEach(co=>{ COMPANIES[co.id]=co; });
+  } catch(_){}
+})();
 const t2m = t => { if(!t) return 0; const [h,m]=t.split(":").map(Number); return h*60+m; };
 const shiftH = s => { let a=t2m(s.start),b=t2m(s.end); if(b<=a) b+=1440; return (b-a-RULES.BREAK_MIN)/60; };
 const isSpec = v => v && Object.values(SPECIAL).some(s=>s.id===v);
@@ -210,63 +222,152 @@ function loadExtra() { const r=localStorage.getItem("so_extra"); return r?JSON.p
 function loadShifts() { const r=localStorage.getItem("so_shifts"); return r?JSON.parse(r):DEFAULT_SHIFTS; }
 function loadSchedule() { const r=localStorage.getItem("so_schedule"); return r?JSON.parse(r):{}; }
 
-function checkRules(sched,users,shifts,wk) {
-  const alerts=[];
-  users.forEach(u=>{
-    const week=sched[wk]||{}; let tH=0,wDs=[];
-    DAYS.forEach((day,di)=>{
-      const c=week[`${day}-${u.id}`]; if(!c||isSpec(c)) return;
-      const s=shifts.find(x=>x.id===c); if(!s) return;
-      const h=shiftH(s); tH+=h; wDs.push(di);
-      if(h>RULES.MAX_DAY_H) alerts.push({type:"error",msg:`${u.name}: excede 10h el ${day}`});
+// ─── RULE ENGINE ──────────────────────────────────────────────────────────────
+// Rule types:
+//   coverage   : {type:"coverage", day:"Lunes"|"all", period:"am"|"pm"|"all", op:"min"|"max", value:N, severity, active}
+//   incompatible: {type:"incompatible", uid1, uid2, severity, active}
+//   overlap    : {type:"overlap", uid1, uid2, severity, active}
+//   hours      : {type:"hours", uid:"all"|id, op:"min"|"max", value:N, severity, active}
+//   consecutive: {type:"consecutive", value:N, severity, active}
+
+function checkRules(sched, users, shifts, wk, customRules=[]) {
+  const alerts = [];
+  const week = sched[wk] || {};
+
+  // Helper: get shift for user on day
+  function getShift(uid, day) {
+    const c = week[`${day}-${uid}`];
+    if (!c || isSpec(c)) return null;
+    return shifts.find(x => x.id === c) || null;
+  }
+
+  // ── Built-in rules (always active unless overridden) ──
+  // Max consecutive days
+  const consRule = customRules.find(r=>r.type==="consecutive"&&r.active!==false);
+  const maxCons = consRule ? consRule.value : 6;
+  users.forEach(u => {
+    let tH = 0, wDs = [];
+    DAYS.forEach((day, di) => {
+      const s = getShift(u.id, day);
+      if (!s) return;
+      const h = shiftH(s); tH += h; wDs.push(di);
+      if (h > 10) alerts.push({type:"error", msg:`${u.name}: excede 10h el ${day}`});
     });
-    if(tH>RULES.WEEK_H) alerts.push({type:"error",msg:`${u.name}: ${tH.toFixed(1)}h — excede 44h`});
-    else if(tH>0&&tH<RULES.WEEK_H-2) alerts.push({type:"warn",msg:`${u.name}: ${tH.toFixed(1)}h de 44h`});
-    if(wDs.length>1){ let st=1; for(let i=1;i<wDs.length;i++){ if(wDs[i]===wDs[i-1]+1){st++;if(st>RULES.MAX_CONSECUTIVE){alerts.push({type:"error",msg:`${u.name}: +6 días seguidos`});break;}}else st=1;}}
+    // Hours rule — check custom first
+    const hRule = customRules.find(r=>r.type==="hours"&&r.active!==false&&(r.uid==="all"||r.uid===u.id));
+    const weekH = hRule ? hRule.value : 44;
+    const hOp   = hRule ? hRule.op : "max";
+    const hSev  = hRule ? hRule.severity : "warn";
+    if (hOp==="max" && tH > weekH) alerts.push({type:"error", msg:`${u.name}: ${tH.toFixed(1)}h — excede ${weekH}h`});
+    else if (hOp==="min" && tH > 0 && tH < weekH - 1) alerts.push({type:hSev, msg:`${u.name}: ${tH.toFixed(1)}h de ${weekH}h`});
+    else if (!hRule && tH > 0 && tH < 42) alerts.push({type:"warn", msg:`${u.name}: ${tH.toFixed(1)}h de 44h`});
+    // Consecutive
+    if (wDs.length > 1) {
+      let st = 1;
+      for (let i = 1; i < wDs.length; i++) {
+        if (wDs[i] === wDs[i-1]+1) { st++; if (st > maxCons) { alerts.push({type:consRule?.severity||"error", msg:`${u.name}: +${maxCons} días seguidos`}); break; } }
+        else st = 1;
+      }
+    }
   });
-  DAYS.forEach((day,di)=>{
-    const week=sched[wk]||{}; let am=0,pm=0;
-    users.forEach(u=>{
-      const c=week[`${day}-${u.id}`]; if(!c||isSpec(c)) return;
-      const s=shifts.find(x=>x.id===c); if(!s) return;
-      t2m(s.start)/60<13?am++:pm++;
+
+  // ── Coverage rules ──
+  const covRules = customRules.filter(r => r.type==="coverage" && r.active!==false);
+  // Built-in coverage if no custom ones
+  if (covRules.length === 0) {
+    DAYS.forEach((day, di) => {
+      let am = 0, pm = 0;
+      users.forEach(u => { const s = getShift(u.id, day); if (!s) return; t2m(s.start)/60 < 13 ? am++ : pm++; });
+      const rPM = di >= 4 ? 3 : 2;
+      if (am < 2) alerts.push({type:"warn", msg:`${day}: AM incompleto (${am}/2)`});
+      if (pm < rPM) alerts.push({type:"warn", msg:`${day}: PM incompleto (${pm}/${rPM})`});
     });
-    const rPM=di>=4?3:2;
-    if(am<2) alerts.push({type:"warn",msg:`${day}: AM incompleto (${am}/2)`});
-    if(pm<rPM) alerts.push({type:"warn",msg:`${day}: PM incompleto (${pm}/${rPM})`});
+  } else {
+    covRules.forEach(r => {
+      const days = r.day === "all" ? DAYS : [r.day];
+      days.forEach(day => {
+        let count = 0;
+        users.forEach(u => {
+          const s = getShift(u.id, day);
+          if (!s) return;
+          const isPM = t2m(s.start)/60 >= 13;
+          const isAM = !isPM;
+          if (r.period==="am" && isAM) count++;
+          else if (r.period==="pm" && isPM) count++;
+          else if (r.period==="all") count++;
+        });
+        const fail = r.op==="min" ? count < r.value : count > r.value;
+        if (fail) alerts.push({type:r.severity||"warn", msg:`${day}: ${r.period==="am"?"AM":r.period==="pm"?"PM":"turno"} — ${r.op==="min"?"mínimo":"máximo"} ${r.value} (hay ${count})`});
+      });
+    });
+  }
+
+  // ── Incompatible pairs ──
+  customRules.filter(r=>r.type==="incompatible"&&r.active!==false).forEach(r=>{
+    const u1 = users.find(u=>u.id===r.uid1);
+    const u2 = users.find(u=>u.id===r.uid2);
+    if (!u1||!u2) return;
+    DAYS.forEach(day=>{
+      const s1=getShift(u1.id,day), s2=getShift(u2.id,day);
+      if (s1&&s2) alerts.push({type:r.severity||"warn", msg:`${u1.name} y ${u2.name} no pueden coincidir el ${day}`});
+    });
   });
+
+  // ── Overlap rules (one must end before other starts, exact minute) ──
+  customRules.filter(r=>r.type==="overlap"&&r.active!==false).forEach(r=>{
+    const u1=users.find(u=>u.id===r.uid1);
+    const u2=users.find(u=>u.id===r.uid2);
+    if(!u1||!u2) return;
+    DAYS.forEach(day=>{
+      const s1=getShift(u1.id,day), s2=getShift(u2.id,day);
+      if(!s1||!s2) return;
+      const s1end=t2m(s1.end)<t2m(s1.start)?t2m(s1.end)+1440:t2m(s1.end);
+      const s2start=t2m(s2.start);
+      // Overlap: s2 starts strictly before s1 ends
+      if(s2start < s1end) alerts.push({type:r.severity||"warn", msg:`${u1.name} y ${u2.name} se solapan el ${day}`});
+    });
+  });
+
   return alerts;
 }
+
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [companyId, setCompanyId] = useState(()=>localStorage.getItem("so_company")||"sf");
-  const company = COMPANIES[companyId];
+  const company = COMPANIES[companyId] || COMPANIES["sf"];
   const pfx = company.prefix;
 
-  const [extra,    setExtra]    = useState(()=>{ const r=localStorage.getItem(pfx+"extra"); return r?JSON.parse(r):[]; });
-  const [hidden,   setHidden]   = useState(()=>JSON.parse(localStorage.getItem(pfx+"hidden")||"[]"));
-  const [shifts,   setShifts]   = useState(()=>{ const r=localStorage.getItem(pfx+"shifts"); return r?JSON.parse(r):DEFAULT_SHIFTS; });
-  const [schedule, setSchedule] = useState(()=>{ const r=localStorage.getItem(pfx+"schedule"); return r?JSON.parse(r):{}; });
+  const [extra,    setExtra]    = useState(()=>safeGet(pfx+"extra", []));
+  const [hidden,   setHidden]   = useState(()=>safeGet(pfx+"hidden", []));
+  const [shifts,   setShifts]   = useState(()=>safeGet(pfx+"shifts", DEFAULT_SHIFTS));
+  const [schedule, setSchedule] = useState(()=>safeGet(pfx+"schedule", {}));
   const [wo,       setWo]       = useState(0);
   const [view,     setView]     = useState("week");
   const [tab,      setTab]      = useState("schedule");
   const [areaF,    setAreaF]    = useState("Todas");
   const [dragging, setDragging] = useState(null);
   const [dragOver, setDragOver] = useState(null);
-  const [ghostPos, setGhostPos] = useState(null); // {x,y,label,color}
+  const [ghostPos, setGhostPos] = useState(null);
   const [picker,   setPicker]   = useState(null);
   const [userModal,setUserModal]= useState(false);
   const [shiftModal,setShiftModal]=useState(false);
   const [editUser, setEditUser] = useState(null);
   const [editShift,setEditShift]= useState(null);
   const [alerts,   setAlerts]   = useState([]);
+  const [customRules, setCustomRules] = useState(()=>safeGet(pfx+"custom_rules", []));
   const [profileUser, setProfileUser] = useState(null);
   const [collapsed,setCollapsed]= useState({turnos:false,estados:false,alertas:false});
+  const [alertsEnabled, setAlertsEnabled] = useState(()=>localStorage.getItem("so_alerts_enabled")!=="0");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [reportModal, setReportModal] = useState(false);
   const [templateModal, setTemplateModal] = useState(false);
-  const [templates, setTemplates] = useState(()=>JSON.parse(localStorage.getItem(pfx+"templates")||"[]"));
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [hiddenCompanies, setHiddenCompanies] = useState(()=>safeGet("so_hidden_companies",[]));
+  const [editingCompany, setEditingCompany] = useState(null); // company object being edited
+  const [coHoverTimer, setCoHoverTimer] = useState(null);
+  const [showCoPlus, setShowCoPlus] = useState(false);
+  const [templates, setTemplates] = useState(()=>safeGet(pfx+"templates", []));
   const [dark,     setDark]     = useState(()=>localStorage.getItem("so_dark")==="1");
   const [monthRef, setMonthRef] = useState(()=>{ const n=new Date(); return{y:n.getFullYear(),m:n.getMonth()}; });
 
@@ -311,7 +412,7 @@ export default function App() {
   const delCell_ref=useRef(null);
   delCell_ref.current=(day,uid)=>removeW(day,uid);
 
-  const FIXED_USERS = company.fixedUsers;
+  const FIXED_USERS = company.fixedUsers || [];
   const users = [...FIXED_USERS, ...extra].filter(u=>!hidden.includes(u.id));
   const visible = areaF==="Todas" ? users : users.filter(u=>u.area===areaF);
   const wk = wKey(wo);
@@ -319,14 +420,16 @@ export default function App() {
   const wSched = schedule[wk]||{};
 
   useEffect(()=>{ localStorage.setItem("so_company", companyId); },[companyId]);
-  useEffect(()=>{ localStorage.setItem(pfx+"extra",   JSON.stringify(extra));    },[extra,pfx]);
-  useEffect(()=>{ localStorage.setItem(pfx+"hidden",  JSON.stringify(hidden));   },[hidden,pfx]);
-  useEffect(()=>{ localStorage.setItem(pfx+"shifts",  JSON.stringify(shifts));   },[shifts,pfx]);
-  useEffect(()=>{ localStorage.setItem(pfx+"schedule",JSON.stringify(schedule)); },[schedule,pfx]);
-  useEffect(()=>{ localStorage.setItem(pfx+"templates",JSON.stringify(templates)); },[templates,pfx]);
-  useEffect(()=>{ localStorage.setItem(pfx+"schedule",JSON.stringify(schedule)); },[schedule,pfx]);
+  useEffect(()=>{ safeSet("so_hidden_companies", hiddenCompanies); },[hiddenCompanies]);
+
+  useEffect(()=>{ safeSet(pfx+"extra",    extra);    },[extra,pfx]);
+  useEffect(()=>{ safeSet(pfx+"hidden",   hidden);   },[hidden,pfx]);
+  useEffect(()=>{ safeSet(pfx+"shifts",   shifts);   },[shifts,pfx]);
+  useEffect(()=>{ safeSet(pfx+"schedule", schedule); },[schedule,pfx]);
+  useEffect(()=>{ safeSet(pfx+"templates",templates); },[templates,pfx]);
+  useEffect(()=>{ safeSet(pfx+"schedule", schedule); },[schedule,pfx]);
   useEffect(()=>{ localStorage.setItem(pfx+"dark", dark?"1":"0"); },[dark]);
-  useEffect(()=>{ setAlerts(checkRules(schedule,visible,shifts,wk)); },[schedule,extra,areaF,shifts,wk]);
+  useEffect(()=>{ setAlerts(checkRules(schedule,visible,shifts,wk,customRules)); },[schedule,extra,areaF,shifts,wk,customRules]);
 
   const setCell=(wk2,dn,uid,val)=>setSchedule(p=>({...p,[wk2]:{...(p[wk2]||{}),[`${dn}-${uid}`]:val}}));
   const delCell=(wk2,dn,uid)=>setSchedule(p=>{ const w={...(p[wk2]||{})}; delete w[`${dn}-${uid}`]; return{...p,[wk2]:w}; });
@@ -379,11 +482,11 @@ export default function App() {
     const newCo=COMPANIES[newId];
     const np=newCo.prefix;
     // Update all state synchronously before changing company
-    const newExtra = JSON.parse(localStorage.getItem(np+"extra")||"[]");
-    const newHidden = JSON.parse(localStorage.getItem(np+"hidden")||"[]");
-    const newShifts = JSON.parse(localStorage.getItem(np+"shifts")||JSON.stringify(DEFAULT_SHIFTS));
-    const newSchedule = JSON.parse(localStorage.getItem(np+"schedule")||"{}");
-    const newTemplates = JSON.parse(localStorage.getItem(np+"templates")||"[]");
+    const newExtra = safeGet(np+"extra", []);
+    const newHidden = safeGet(np+"hidden", []);
+    const newShifts = safeGet(np+"shifts", DEFAULT_SHIFTS);
+    const newSchedule = safeGet(np+"schedule", {});
+    const newTemplates = safeGet(np+"templates", []);
     // Save current company data first
     localStorage.setItem(pfx+"extra",    JSON.stringify(extra));
     localStorage.setItem(pfx+"shifts",   JSON.stringify(shifts));
@@ -500,8 +603,9 @@ export default function App() {
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
         *{box-sizing:border-box;margin:0;padding:0;}
-        .no-select,button,.sb-row,.cell-plus,.fill-handle{user-select:none;-webkit-user-select:none;-webkit-user-drag:none;}
-        input,select,textarea{user-select:text!important;-webkit-user-select:text!important;}        ::-webkit-scrollbar{width:4px;height:4px;}
+        body,#root{user-select:none;-webkit-user-select:none;}
+        input,select,textarea{user-select:text!important;-webkit-user-select:text!important;}
+        .no-select,button,.sb-row,.cell-plus,.fill-handle{user-select:none;-webkit-user-select:none;-webkit-user-drag:none;}        ::-webkit-scrollbar{width:4px;height:4px;}
         ::-webkit-scrollbar-thumb{background:${D.scrollThumb};border-radius:4px;}
         ::-webkit-scrollbar-track{background:transparent;}
         .btn{cursor:pointer;border:none;font-family:'Inter',sans-serif;transition:all .18s cubic-bezier(.4,0,.2,1);}
@@ -566,20 +670,29 @@ export default function App() {
       <div style={{borderBottom:`1px solid ${D.navBorder}`,padding:"0 20px",display:"flex",alignItems:"center",gap:10,height:50,background:D.nav}}>
         <span style={{fontWeight:700,fontSize:14,letterSpacing:"-0.4px",color:D.text,marginRight:6}}>{company.name}</span>
         <div style={{display:"flex",gap:2}}>
-          {[["schedule","Horario"],["tasks","Tareas"],["users","Personas"],["shifts","Turnos"]].map(([t,l])=>(
+          {[["schedule","Horario"],["tasks","Tareas"],["users","Personas"],["shifts","Turnos"],["companies","Empresas"]].map(([t,l])=>(
             <button key={t} className={`tab ${tab===t?"active":""}`} onClick={()=>setTab(t)}>{l}</button>
           ))}
         </div>
         <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:5}}>
-          {/* Company toggle */}
-          <button className="btn" onClick={()=>switchCompany(companyId==="sf"?"mf":"sf")}
-            title={`Cambiar a ${companyId==="sf"?"Mafia":"Street Flags"}`}
+          {/* Cambiar empresa */}
+          <button className="btn" onClick={()=>{ const ids=Object.keys(COMPANIES); const next=ids[(ids.indexOf(companyId)+1)%ids.length]; switchCompany(next); }}
+            title={`Cambiar empresa`}
             style={{background:"none",border:`1px solid ${D.btnBorder}`,borderRadius:6,padding:"6px 7px",display:"flex",alignItems:"center",justifyContent:"center"}}>
             <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
               <rect x="1" y="5" width="11" height="7" rx="1" stroke={D.text2} strokeWidth="1.2"/>
               <path d="M4 5V3.5C4 2.67 4.67 2 5.5 2h2C8.33 2 9 2.67 9 3.5V5" stroke={D.text2} strokeWidth="1.2"/>
               <path d="M4 8.5h2M7 8.5h2" stroke={D.text2} strokeWidth="1.2" strokeLinecap="round"/>
             </svg>
+          </button>
+          {/* Nueva empresa */}
+          <button className="btn" onClick={()=>setWizardOpen(true)} title="Nueva empresa"
+            style={{background:"none",border:`1px solid ${D.btnBorder}`,borderRadius:6,padding:"5px 7px",display:"flex",alignItems:"center",justifyContent:"center",gap:3,fontSize:11,color:D.text2}}>
+            <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
+              <rect x=".75" y="4" width="9.5" height="6.25" rx="1" stroke={D.text2} strokeWidth="1.2"/>
+              <path d="M3.5 4V2.8C3.5 2.08 4.08 1.5 4.8 1.5h1.4c.72 0 1.3.58 1.3 1.3V4" stroke={D.text2} strokeWidth="1.2"/>
+            </svg>
+            <span>+</span>
           </button>
           {/* Dark mode toggle */}
           <button className="btn" onClick={()=>setDark(d=>!d)} title={dark?"Modo claro":"Modo oscuro"}
@@ -634,13 +747,6 @@ export default function App() {
       {tab==="schedule" && (
         <div style={{display:"flex",height:"calc(100vh - 50px)",position:"relative"}}>
 
-          {/* Sidebar toggle button */}
-          <button className="btn" onClick={()=>setSidebarOpen(o=>!o)}
-            title={sidebarOpen?"Ocultar panel":"Mostrar panel"}
-            style={{position:"absolute",left:sidebarOpen?168:8,top:66,zIndex:20,width:20,height:20,borderRadius:"50%",background:D.bg2,border:`1px solid ${D.border2}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,color:D.text2,boxShadow:`0 1px 4px rgba(0,0,0,${dark?.3:.1})`,transition:"left .2s",padding:0,flexShrink:0}}>
-            {sidebarOpen?"‹":"›"}
-          </button>
-
           {/* Sidebar */}
           <div style={{width:sidebarOpen?160:0,borderRight:`1px solid ${D.border}`,padding:sidebarOpen?"16px 13px":"0",overflowY:"auto",overflowX:"hidden",flexShrink:0,display:"flex",flexDirection:"column",gap:16,transition:"width .2s, padding .2s",background:D.bg}}>
 
@@ -683,25 +789,39 @@ export default function App() {
             </div>
 
             {/* Alertas */}
-            {alerts.length>0 && (
-              <div>
-                <div className="sec-hdr" onClick={()=>tog("alertas")}>
-                  <span className="sec-ttl">Alertas {alerts.length>0 && <span style={{color:errN>0?"#9B2335":"#AAA"}}>({alerts.length})</span>}</span>
+            <div>
+              <div className="sec-hdr" onClick={()=>tog("alertas")} style={{justifyContent:"space-between"}}>
+                <span className="sec-ttl">Alertas
+                  {alertsEnabled && alerts.length>0 && <span style={{color:errN>0?"#9B2335":"#AAA",marginLeft:4}}>({alerts.length})</span>}
+                </span>
+                <div style={{display:"flex",alignItems:"center",gap:6}}>
+                  {/* toggle */}
+                  <div onClick={e=>{ e.stopPropagation(); setAlertsEnabled(v=>{ localStorage.setItem("so_alerts_enabled",v?"0":"1"); return !v; }); }}
+                    style={{width:26,height:15,borderRadius:8,background:alertsEnabled?"#4CAF50":"#CCC",position:"relative",cursor:"pointer",transition:"background .2s",flexShrink:0}}>
+                    <div style={{position:"absolute",top:1.5,left:alertsEnabled?12:1.5,width:12,height:12,borderRadius:"50%",background:"#fff",transition:"left .2s",boxShadow:"0 1px 2px rgba(0,0,0,.25)"}}/>
+                  </div>
                   <span className={`tog ${!collapsed.alertas?"open":""}`}><span/></span>
                 </div>
-                {!collapsed.alertas && alerts.slice(0,8).map((a,i)=>(
-                  <div key={i} className="sb-row" style={{cursor:"default",alignItems:"flex-start"}}>
-                    <div style={{width:5,height:5,borderRadius:"50%",background:a.type==="error"?"#9B2335":"#C8A000",flexShrink:0,marginTop:3}}/>
-                    <div style={{fontSize:11,fontWeight:400,color:D.text,lineHeight:1.4}}>{a.msg}</div>
-                  </div>
-                ))}
               </div>
-            )}
+              {alertsEnabled && !collapsed.alertas && alerts.slice(0,8).map((a,i)=>(
+                <div key={i} className="sb-row" style={{cursor:"default",alignItems:"flex-start"}}>
+                  <div style={{width:5,height:5,borderRadius:"50%",background:a.type==="error"?"#9B2335":"#C8A000",flexShrink:0,marginTop:3}}/>
+                  <div style={{fontSize:11,fontWeight:400,color:D.text,lineHeight:1.4}}>{a.msg}</div>
+                </div>
+              ))}
+              {!alertsEnabled && <div style={{fontSize:11,color:D.text3,padding:"4px 4px 2px"}}>Desactivadas</div>}
+            </div>
           </div>
 
           {/* Main */}
           <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:D.bg}}>
-            <div style={{padding:"8px 16px",borderBottom:`1px solid ${D.border}`,display:"flex",alignItems:"center",gap:9,flexShrink:0,paddingLeft:44,background:D.bg}}>
+            <div style={{padding:"8px 10px 8px 8px",borderBottom:`1px solid ${D.border}`,display:"flex",alignItems:"center",gap:9,flexShrink:0,background:D.bg}}>
+              {/* Sidebar toggle — inline, no overlap */}
+              <button className="btn" onClick={()=>setSidebarOpen(o=>!o)}
+                title={sidebarOpen?"Ocultar panel":"Mostrar panel"}
+                style={{width:20,height:20,borderRadius:"50%",background:D.bg2,border:`1px solid ${D.border2}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,color:D.text2,flexShrink:0,padding:0}}>
+                {sidebarOpen?"‹":"›"}
+              </button>
               <div style={{background:D.bg3,borderRadius:6,padding:3,display:"flex",gap:1}}>
                 <button className={`vtab ${view==="week"?"active":""}`} onClick={()=>setView("week")}>WK</button>
                 <button className={`vtab ${view==="month"?"active":""}`} onClick={()=>setView("month")}>Mes</button>
@@ -812,7 +932,125 @@ export default function App() {
             </div>
           ))}
         </div>
+        <RulesSection users={users} customRules={customRules} setCustomRules={setCustomRules} dark={dark} D={D} pfx={pfx}/>
       </>
+      )}
+
+      {/* ── EMPRESAS ── */}
+      {tab==="companies" && (
+        <div style={{maxWidth:680,margin:"32px auto",padding:"0 24px"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:24}}>
+            <div>
+              <div style={{fontSize:18,fontWeight:700,color:D.text}}>Empresas</div>
+              <div style={{fontSize:13,color:D.text2,marginTop:2}}>{Object.keys(COMPANIES).length} registradas</div>
+            </div>
+            <button className="btn" onClick={()=>setWizardOpen(true)}
+              style={{background:D.tabActive,color:D.tabActiveText,padding:"7px 14px",borderRadius:6,fontSize:13,fontWeight:500}}>
+              + Nueva
+            </button>
+          </div>
+
+          {Object.values(COMPANIES).map(co=>{
+            const isActive   = co.id === companyId;
+            const isEnabled  = !hiddenCompanies.includes(co.id);
+            const isBuiltIn  = false; // all companies can be deleted
+
+            function deleteCompany() {
+              if(!window.confirm(`¿Eliminar "${co.name}"? Se borrarán todos sus datos.`)) return;
+              delete COMPANIES[co.id];
+              safeSet("so_custom_companies", safeGet("so_custom_companies",[]).filter(c=>c.id!==co.id));
+              const p = co.prefix;
+              ["extra","shifts","schedule","templates","hidden","rot_names","fix_names","colacion","plancha"].forEach(k=>{ try{localStorage.removeItem(p+k);}catch(_){} });
+              if(isActive) switchCompany("sf");
+              else setHiddenCompanies(h=>[...h]); // trigger re-render
+            }
+
+            function toggleEnabled() {
+              if(isActive && isEnabled) return; // can't disable active
+              setHiddenCompanies(h=> isEnabled ? [...h, co.id] : h.filter(id=>id!==co.id));
+            }
+
+            return (
+              <div key={co.id} style={{display:"flex",alignItems:"center",gap:14,padding:"14px 16px",
+                borderRadius:10,marginBottom:8,border:`1px solid ${isActive?D.tabActive:D.border}`,
+                background:isActive?(dark?"#1A1A2A":"#F5F7FF"):isEnabled?D.bg:D.bg3,
+                opacity:isEnabled?1:0.55,transition:"opacity .2s",cursor:"pointer"}}
+                onClick={()=>setEditingCompany({...co})}>
+
+                {/* Info */}
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:14,fontWeight:600,color:D.text}}>{co.name}
+                    {isActive && <span style={{marginLeft:8,fontSize:10,fontWeight:600,color:D.tabActive,background:dark?"#1A2A3A":"#E8F0FF",padding:"2px 7px",borderRadius:10}}>Activa</span>}
+                  </div>
+                  <div style={{fontSize:12,color:D.text2,marginTop:2}}>
+                    {(co.areas||[]).join(" · ")} · {(co.fixedUsers||[]).length} personas
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div style={{display:"flex",gap:8,alignItems:"center",flexShrink:0}} onClick={e=>e.stopPropagation()}>
+                  {/* Toggle on/off estilo Apple */}
+                  <div onClick={isActive&&isEnabled?null:toggleEnabled}
+                    title={isEnabled?"Desactivar":"Activar"}
+                    style={{width:36,height:20,borderRadius:10,background:isEnabled?(isActive?"#4CAF50":"#888"):"#CCC",
+                      position:"relative",cursor:isActive&&isEnabled?"not-allowed":"pointer",transition:"background .2s",flexShrink:0}}>
+                    <div style={{position:"absolute",top:2,left:isEnabled?18:2,width:16,height:16,borderRadius:"50%",
+                      background:"#fff",transition:"left .2s",boxShadow:"0 1px 3px rgba(0,0,0,.3)"}}/>
+                  </div>
+
+                  {/* Eliminar — solo no built-in */}
+                  {!isBuiltIn && (
+                    <button className="btn" onClick={deleteCompany} title="Eliminar empresa"
+                      style={{background:"none",border:`1px solid ${D.border}`,borderRadius:6,padding:"5px 8px",color:"#9B2335",display:"flex",alignItems:"center"}}>
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                        <path d="M1.5 3h9M4.5 3V2h3v1M5 5.5v3M7 5.5v3M2.5 3l.5 7h6l.5-7" stroke="#9B2335" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+
+          <p style={{fontSize:11,color:D.text3,marginTop:16}}>Clic en una empresa para editarla.</p>
+        </div>
+      )}
+
+      {/* Edit company modal */}
+      {editingCompany && (
+        <div className="modal-bg" onClick={()=>setEditingCompany(null)}>
+          <div className="modal" onClick={e=>e.stopPropagation()} style={{width:380,background:D.bg2,border:`1px solid ${D.border}`,padding:0}}>
+            <div style={{padding:"14px 18px 12px",borderBottom:`1px solid ${D.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <span style={{fontSize:14,fontWeight:600,color:D.text}}>Editar empresa</span>
+              <button className="btn" onClick={()=>setEditingCompany(null)} style={{background:"none",color:D.text2,fontSize:17,padding:"2px 6px",lineHeight:1}}>×</button>
+            </div>
+            <div style={{padding:"18px 20px 16px"}}>
+              <div style={{marginBottom:14}}>
+                <label style={{fontSize:11,fontWeight:600,color:D.text2,textTransform:"uppercase",letterSpacing:".6px"}}>Nombre</label>
+                <input value={editingCompany.name} onChange={e=>setEditingCompany(c=>({...c,name:e.target.value}))}
+                  style={{width:"100%",marginTop:6,fontSize:14,padding:"9px 12px",borderRadius:7,border:`1px solid ${D.border}`,background:D.input,color:D.text,outline:"none",fontFamily:"inherit"}}/>
+              </div>
+              <div style={{marginBottom:18}}>
+                <label style={{fontSize:11,fontWeight:600,color:D.text2,textTransform:"uppercase",letterSpacing:".6px"}}>Áreas</label>
+                <div style={{fontSize:12,color:D.text2,marginTop:4}}>Para editar personas y áreas en detalle, ve a la pestaña Personas.</div>
+              </div>
+              <button className="btn" onClick={()=>{
+                // Save name change
+                COMPANIES[editingCompany.id]={...COMPANIES[editingCompany.id],name:editingCompany.name};
+                // If custom, update saved list
+                if(editingCompany.id!=="sf"&&editingCompany.id!=="mf"){
+                  const list=safeGet("so_custom_companies",[]).map(c=>c.id===editingCompany.id?{...c,name:editingCompany.name}:c);
+                  safeSet("so_custom_companies",list);
+                }
+                setEditingCompany(null);
+                // Force re-render
+                setTab("schedule"); setTimeout(()=>setTab("companies"),0);
+              }} style={{width:"100%",padding:"9px",borderRadius:7,fontSize:13,fontWeight:500,background:D.tabActive,color:D.tabActiveText,border:"none"}}>
+                Guardar
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Modals */}
@@ -830,6 +1068,34 @@ export default function App() {
         onApplyWeek={(tpl,wo2)=>applyTemplate(tpl,wo2)}
         onApplyMonth={(tpl,y,m)=>applyTemplateMonth(tpl,y,m)}
         onClose={()=>setTemplateModal(false)} />}}
+
+      {wizardOpen && <WizardModal dark={dark} onClose={()=>setWizardOpen(false)}
+        onComplete={(co)=>{
+          try {
+            const p=co.prefix;
+            const fu=co.fixedUsers||[];
+            safeSet(p+"extra",    fu);
+            safeSet(p+"shifts",   DEFAULT_SHIFTS);
+            safeSet(p+"schedule", {});
+            safeSet(p+"templates",[]);
+            safeSet(p+"hidden",   []);
+            const existing=safeGet("so_custom_companies", []);
+            safeSet("so_custom_companies",[...existing.filter(c=>c.id!==co.id),co]);
+            // Add to COMPANIES runtime
+            COMPANIES[co.id]=co;
+            localStorage.setItem("so_company", co.id);
+            // Switch without reload
+            setCompanyId(co.id);
+            setExtra(fu);
+            setHidden([]);
+            setShifts(DEFAULT_SHIFTS);
+            setSchedule({});
+            setTemplates([]);
+            setAreaF("Todas");
+            setTab("users");
+            setWizardOpen(false);
+          } catch(e){ alert("Error al crear empresa: "+e.message); }
+        }} />}
 
       {profileUser && <ProfileModal user={profileUser} users={users} shifts={shifts} schedule={schedule} dark={dark} company={company} pfx={pfx}
         onClose={()=>setProfileUser(null)} onEdit={u=>{ setEditUser(u); setUserModal(true); setProfileUser(null); }} />}
@@ -1119,6 +1385,134 @@ function getPlanchaForDay(dateObj){
   const n=PLANCHA_USERS.length;
   const planchaIdx=((Math.floor(absDay/2)%n)+n)%n;
   return PLANCHA_USERS[planchaIdx];
+}
+
+// ─── RULES SECTION ────────────────────────────────────────────────────────────
+function RulesSection({ users, customRules, setCustomRules, dark, D, pfx }) {
+  const [adding, setAdding] = useState(false);
+  const [form, setForm] = useState({type:"coverage",day:"all",period:"am",op:"min",value:"2",uid1:"",uid2:"",uid:"all",severity:"warn",active:true});
+
+  const RULE_LABELS = {
+    coverage:     "Cobertura",
+    incompatible: "No pueden coincidir",
+    overlap:      "Sin solapamiento",
+    hours:        "Horas semanales",
+    consecutive:  "Días consecutivos",
+  };
+
+  function ruleDesc(r) {
+    const u1=users.find(u=>u.id===r.uid1); const u2=users.find(u=>u.id===r.uid2);
+    const u=users.find(u=>u.id===r.uid);
+    if(r.type==="coverage") return `${r.day==="all"?"Todos los días":r.day} · ${r.period==="am"?"AM":r.period==="pm"?"PM":"Cualquier turno"} · ${r.op==="min"?"Mín":"Máx"} ${r.value}`;
+    if(r.type==="incompatible") return `${u1?.name||"?"} y ${u2?.name||"?"} no coinciden`;
+    if(r.type==="overlap") return `${u1?.name||"?"} y ${u2?.name||"?"} sin solapamiento`;
+    if(r.type==="hours") return `${r.uid==="all"?"Todos":u?.name||"?"} · ${r.op==="max"?"Máx":"Mín"} ${r.value}h/semana`;
+    if(r.type==="consecutive") return `Máx ${r.value} días seguidos`;
+    return "";
+  }
+
+  function addRule() {
+    const r={...form, id:`rule_${Date.now()}`, value:parseInt(form.value)||2};
+    setCustomRules(p=>[...p,r]);
+    setAdding(false);
+    setForm({type:"coverage",day:"all",period:"am",op:"min",value:"2",uid1:"",uid2:"",uid:"all",severity:"warn",active:true});
+  }
+
+  const sel=(val,onChange,opts,style={})=>(
+    <select value={val} onChange={e=>onChange(e.target.value)}
+      style={{fontSize:12,padding:"6px 8px",borderRadius:6,border:`1px solid ${D.border}`,background:D.input,color:D.text,outline:"none",fontFamily:"inherit",...style}}>
+      {opts.map(([v,l])=><option key={v} value={v}>{l}</option>)}
+    </select>
+  );
+
+  return (
+    <div style={{maxWidth:680,margin:"0 auto",padding:"0 24px 40px"}}>
+      <div style={{height:1,background:D.border,margin:"24px 0 20px"}}/>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+        <div>
+          <div style={{fontSize:15,fontWeight:700,color:D.text}}>Alertas</div>
+          <div style={{fontSize:12,color:D.text2,marginTop:2}}>{customRules.length} regla{customRules.length!==1?"s":""} · sin reglas usa las predeterminadas</div>
+        </div>
+        <button className="btn" onClick={()=>setAdding(a=>!a)}
+          style={{background:D.tabActive,color:D.tabActiveText,padding:"6px 13px",borderRadius:6,fontSize:12,fontWeight:500}}>
+          {adding?"Cancelar":"+ Nueva regla"}
+        </button>
+      </div>
+
+      {/* Nueva regla form */}
+      {adding && (
+        <div style={{background:D.bg2,border:`1px solid ${D.border}`,borderRadius:10,padding:"16px",marginBottom:14}}>
+          <div style={{display:"flex",flexWrap:"wrap",gap:8,alignItems:"center",marginBottom:12}}>
+            {sel(form.type,v=>setForm(f=>({...f,type:v})),[
+              ["coverage","Cobertura"],["incompatible","No coincidir"],["overlap","Sin solapamiento"],["hours","Horas semanales"],["consecutive","Días seguidos"]
+            ])}
+            {form.type==="coverage" && <>
+              {sel(form.day,v=>setForm(f=>({...f,day:v})),[["all","Todos los días"],...DAYS.map(d=>[d,d])])}
+              {sel(form.period,v=>setForm(f=>({...f,period:v})),[["am","AM"],["pm","PM"],["all","Ambos"]])}
+              {sel(form.op,v=>setForm(f=>({...f,op:v})),[["min","Mínimo"],["max","Máximo"]])}
+              <input value={form.value} onChange={e=>setForm(f=>({...f,value:e.target.value}))} type="number" placeholder="N"
+                style={{width:56,fontSize:12,padding:"6px 8px",borderRadius:6,border:`1px solid ${D.border}`,background:D.input,color:D.text,outline:"none",fontFamily:"inherit"}}/>
+            </>}
+            {(form.type==="incompatible"||form.type==="overlap") && <>
+              {sel(form.uid1,v=>setForm(f=>({...f,uid1:v})),
+                [["","Persona A"],...users.map(u=>[u.id,u.name])])}
+              {sel(form.uid2,v=>setForm(f=>({...f,uid2:v})),
+                [["","Persona B"],...users.filter(u=>u.id!==form.uid1).map(u=>[u.id,u.name])])}
+            </>}
+            {form.type==="hours" && <>
+              {sel(form.uid,v=>setForm(f=>({...f,uid:v})),
+                [["all","Todos"],...users.map(u=>[u.id,u.name])])}
+              {sel(form.op,v=>setForm(f=>({...f,op:v})),[["max","Máximo"],["min","Mínimo"]])}
+              <input value={form.value} onChange={e=>setForm(f=>({...f,value:e.target.value}))} type="number" placeholder="horas"
+                style={{width:64,fontSize:12,padding:"6px 8px",borderRadius:6,border:`1px solid ${D.border}`,background:D.input,color:D.text,outline:"none",fontFamily:"inherit"}}/>
+              <span style={{fontSize:12,color:D.text2}}>h/semana</span>
+            </>}
+            {form.type==="consecutive" && <>
+              <input value={form.value} onChange={e=>setForm(f=>({...f,value:e.target.value}))} type="number" placeholder="días"
+                style={{width:56,fontSize:12,padding:"6px 8px",borderRadius:6,border:`1px solid ${D.border}`,background:D.input,color:D.text,outline:"none",fontFamily:"inherit"}}/>
+              <span style={{fontSize:12,color:D.text2}}>días máximo</span>
+            </>}
+            {sel(form.severity,v=>setForm(f=>({...f,severity:v})),[["warn","⚠ Aviso"],["error","🔴 Error"]])}
+          </div>
+          <div style={{display:"flex",justifyContent:"flex-end"}}>
+            <button className="btn" onClick={addRule}
+              style={{background:D.tabActive,color:D.tabActiveText,padding:"7px 16px",borderRadius:6,fontSize:12,fontWeight:500}}>
+              Agregar
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Rules list */}
+      {customRules.length===0 && !adding && (
+        <div style={{padding:"16px",borderRadius:8,border:`1px dashed ${D.border}`,fontSize:12,color:D.text3,textAlign:"center"}}>
+          Sin reglas personalizadas — se usan las reglas predeterminadas
+        </div>
+      )}
+      {customRules.map((r,i)=>(
+        <div key={r.id||i} style={{display:"flex",alignItems:"center",gap:10,padding:"11px 14px",borderRadius:8,marginBottom:6,
+          border:`1px solid ${D.border}`,background:r.active!==false?D.bg:D.bg3,opacity:r.active!==false?1:.5}}>
+          <div style={{width:8,height:8,borderRadius:"50%",background:r.severity==="error"?"#9B2335":"#C8A000",flexShrink:0}}/>
+          <div style={{flex:1}}>
+            <span style={{fontSize:11,fontWeight:600,color:D.text2,marginRight:8,textTransform:"uppercase",letterSpacing:".5px"}}>{RULE_LABELS[r.type]}</span>
+            <span style={{fontSize:13,color:D.text}}>{ruleDesc(r)}</span>
+          </div>
+          {/* Toggle */}
+          <div onClick={()=>setCustomRules(p=>p.map((x,j)=>j===i?{...x,active:x.active===false}:x))}
+            style={{width:32,height:18,borderRadius:9,background:r.active!==false?"#4CAF50":"#CCC",
+              position:"relative",cursor:"pointer",transition:"background .2s",flexShrink:0}}>
+            <div style={{position:"absolute",top:2,left:r.active!==false?14:2,width:14,height:14,borderRadius:"50%",
+              background:"#fff",transition:"left .2s",boxShadow:"0 1px 3px rgba(0,0,0,.25)"}}/>
+          </div>
+          {/* Delete */}
+          <button className="btn" onClick={()=>setCustomRules(p=>p.filter((_,j)=>j!==i))}
+            style={{background:"none",border:`1px solid ${D.border}`,color:"#9B2335",padding:"4px 7px",borderRadius:5,display:"flex",alignItems:"center"}}>
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M1.5 3h9M4.5 3V2h3v1M5 5.5v3M7 5.5v3M2.5 3l.5 7h6l.5-7" stroke="#9B2335" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          </button>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function TasksTab({ users, schedule, dark, company, pfx }) {
@@ -1545,20 +1939,18 @@ function ReportModal({ users, shifts, schedule, wo, monthRef, dark, onClose }) {
       const au=users.filter(u=>u.area===filterArea);
       const wd=weekDates(w);
       tableHTML=`<h2>${filterArea} · ${weekLabel(w)}</h2><table>
-        <thead><tr><th>Persona</th>${wd.map((d,di)=>`<th>${DAY_SHORT[di]}<br><span style="font-weight:400;color:#888">${d.getDate()}</span></th>`).join("")}<th>hrs</th></tr></thead>
+        <thead><tr><th>Persona</th>${wd.map((d,di)=>`<th>${DAY_SHORT[di]}<br><span style="font-weight:400;color:#888">${d.getDate()}</span></th>`).join("")}</tr></thead>
         <tbody>${au.map(u=>{
-          let th=0;
-          const cells=DAYS.map(day=>{ const c=wSched[`${day}-${u.id}`]; if(!c) return "<td>—</td>"; const sp=getSpec(c); if(sp) return `<td>${sp.hidden?"":sp.label}</td>`; const s=shifts.find(x=>x.id===c); if(!s) return "<td>—</td>"; th+=shiftH(s); return `<td>${s.name}<br><span style="color:#888;font-size:10px">${s.start}–${s.end}</span></td>`; }).join("");
-          return `<tr><td class="name">${u.name}</td>${cells}<td class="hrs">${th.toFixed(1)}h</td></tr>`;
+          const cells=DAYS.map(day=>{ const c=wSched[`${day}-${u.id}`]; if(!c) return "<td>—</td>"; const sp=getSpec(c); if(sp) return `<td>${sp.hidden?"":sp.label}</td>`; const s=shifts.find(x=>x.id===c); if(!s) return "<td>—</td>"; return `<td>${s.start}–${s.end}</td>`; }).join("");
+          return `<tr><td class="name">${u.name}</td>${cells}</tr>`;
         }).join("")}</tbody></table>`;
     } else if(period==="month-current") {
       const au=users.filter(u=>u.area===filterArea);
       const allD=monthDates(monthRef.y,monthRef.m);
       tableHTML=`<h2>${filterArea} · ${MONTH_NAMES[monthRef.m]} ${monthRef.y}</h2><table>
         <thead><tr><th>Día</th><th>Fecha</th>${au.map(u=>`<th>${u.name.split(" ")[0]}</th>`).join("")}</tr></thead>
-        <tbody>${allD.map(date=>{ const di=(date.getDay()+6)%7; const cells=au.map(u=>{ const c=cellByDate(schedule,date,u.id); if(!c) return "<td>—</td>"; const sp=getSpec(c); if(sp) return `<td>${sp.hidden?"":sp.label}</td>`; const s=shifts.find(x=>x.id===c); if(!s) return "<td>—</td>"; return `<td>${s.name}</td>`; }).join(""); return `<tr style="${di===6?'color:#AAA':''}"><td>${DAY_SHORT[di]}</td><td style="color:#888">${date.getDate()}</td>${cells}</tr>`; }).join("")}</tbody></table>`;
+        <tbody>${allD.map(date=>{ const di=(date.getDay()+6)%7; const cells=au.map(u=>{ const c=cellByDate(schedule,date,u.id); if(!c) return "<td>—</td>"; const sp=getSpec(c); if(sp) return `<td>${sp.hidden?"":sp.label}</td>`; const s=shifts.find(x=>x.id===c); if(!s) return "<td>—</td>"; return `<td>${s.start}–${s.end}</td>`; }).join(""); return `<tr style="${di===6?'color:#AAA':''}"><td>${DAY_SHORT[di]}</td><td style="color:#888">${date.getDate()}</td>${cells}</tr>`; }).join("")}</tbody></table>`;
     } else {
-      // custom — iterate each week in range
       const lo=Math.min(customWo1,customWo2), hi=Math.max(customWo1,customWo2);
       const au=users.filter(u=>u.area===filterArea);
       tableHTML="";
@@ -1566,8 +1958,8 @@ function ReportModal({ users, shifts, schedule, wo, monthRef, dark, onClose }) {
         const wk2=wKey(w), wSched=schedule[wk2]||{};
         const wd=weekDates(w);
         tableHTML+=`<h2>${filterArea} · ${weekLabel(w)}</h2><table>
-          <thead><tr><th>Persona</th>${wd.map((d,di)=>`<th>${DAY_SHORT[di]}<br><span style="font-weight:400;color:#888">${d.getDate()}</span></th>`).join("")}<th>hrs</th></tr></thead>
-          <tbody>${au.map(u=>{ let th=0; const cells=DAYS.map(day=>{ const c=wSched[`${day}-${u.id}`]; if(!c) return "<td>—</td>"; const sp=getSpec(c); if(sp) return `<td>${sp.hidden?"":sp.label}</td>`; const s=shifts.find(x=>x.id===c); if(!s) return "<td>—</td>"; th+=shiftH(s); return `<td>${s.name}<br><span style="color:#888;font-size:10px">${s.start}–${s.end}</span></td>`; }).join(""); return `<tr><td class="name">${u.name}</td>${cells}<td class="hrs">${th.toFixed(1)}h</td></tr>`; }).join("")}</tbody></table>`;
+          <thead><tr><th>Persona</th>${wd.map((d,di)=>`<th>${DAY_SHORT[di]}<br><span style="font-weight:400;color:#888">${d.getDate()}</span></th>`).join("")}</tr></thead>
+          <tbody>${au.map(u=>{ const cells=DAYS.map(day=>{ const c=wSched[`${day}-${u.id}`]; if(!c) return "<td>—</td>"; const sp=getSpec(c); if(sp) return `<td>${sp.hidden?"":sp.label}</td>`; const s=shifts.find(x=>x.id===c); if(!s) return "<td>—</td>"; return `<td>${s.start}–${s.end}</td>`; }).join(""); return `<tr><td class="name">${u.name}</td>${cells}</tr>`; }).join("")}</tbody></table>`;
       }
     }
     return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Reporte ${filterArea}</title>
@@ -1666,6 +2058,237 @@ function ReportModal({ users, shifts, schedule, wo, monthRef, dark, onClose }) {
 }
 
 // ─── TEMPLATE MODAL ───────────────────────────────────────────────────────────
+// ─── COMPANY WIZARD ───────────────────────────────────────────────────────────
+function WizardModal({ dark, onClose, onComplete }) {
+  const D = getD(dark);
+  const COLORS = ["#4B6CB7","#2E7D8C","#5A7A5A","#7A5A8C","#8C6A3A","#3A6A8C","#6A3A5A","#5A8C6A","#8C3A3A","#6A5A3A","#3A8C6A","#8C7A3A"];
+
+  // Steps: 0=coName, 1=total, 2=numAreas,
+  //        3+2i = areaName[i], 3+2i+1 = areaCount[i] (last area skips count)
+  //        finalStep = loading
+  const [step, setStep]         = useState(0);
+  const [coName, setCoName]     = useState("");
+  const [total, setTotal]       = useState("");
+  const [numAreas, setNumAreas] = useState("");
+  const [areaData, setAreaData] = useState([]); // [{name, count}]
+  const [curVal, setCurVal]     = useState("");
+  const [loadPct, setLoadPct]   = useState(0);
+  const [done, setDone]         = useState(false);
+
+  const totalNum    = parseInt(total)    || 0;
+  const numAreasNum = parseInt(numAreas) || 0;
+
+  // From step 3 onward: alternating name/count for each area
+  // step 3       = name of area 0
+  // step 4       = count of area 0  (skipped if last area)
+  // step 5       = name of area 1
+  // step 6       = count of area 1  (skipped if last area)
+  // ...
+  // finalStep = 3 + numAreasNum*2 - (last area has no count step) = 3 + numAreasNum*2 - 1
+  const firstAreaStep = 3;
+  const stepsPerArea  = 2;
+  // For area i: nameStep = 3 + i*2, countStep = 3 + i*2 + 1
+  // Last area (i = numAreasNum-1) has no count step
+  const finalStep = numAreasNum > 0
+    ? firstAreaStep + (numAreasNum - 1) * stepsPerArea + 1  // last area only has name
+    : firstAreaStep;
+
+  const isNameStep  = step >= firstAreaStep && (step - firstAreaStep) % 2 === 0 && step < firstAreaStep + numAreasNum * 2;
+  const isCountStep = step >= firstAreaStep && (step - firstAreaStep) % 2 === 1 && step < firstAreaStep + numAreasNum * 2;
+  const areaIdx     = isNameStep || isCountStep ? Math.floor((step - firstAreaStep) / 2) : -1;
+  const isLastArea  = areaIdx === numAreasNum - 1;
+  const isLoading   = step === finalStep;
+
+  const usedCounts  = areaData.reduce((s, a) => s + (parseInt(a.count) || 0), 0);
+  const leftover    = totalNum - usedCounts;
+
+  const totalStepCount = finalStep;
+  const progress = isLoading ? loadPct : Math.round((step / Math.max(totalStepCount, 1)) * 100);
+
+  function startLoading() {
+    let pct = 0;
+    const iv = setInterval(() => {
+      pct += 2;
+      setLoadPct(Math.min(pct, 100));
+      if (pct >= 100) {
+        clearInterval(iv);
+        setDone(true);
+        setTimeout(() => onComplete(buildCompany()), 800);
+      }
+    }, 60);
+  }
+
+  function buildCompany() {
+    const id = "co_" + coName.toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "") + "_" + Date.now();
+    const fixedUsers = [];
+    let idx = 0;
+    areaData.forEach((a) => {
+      const ct = parseInt(a.count) || 0;
+      for (let i = 0; i < ct; i++) {
+        fixedUsers.push({ id: `${id}_u${idx}`, name: `${a.name} ${i+1}`, role: "Full Time", area: a.name, color: COLORS[idx % COLORS.length], contractType: "ft" });
+        idx++;
+      }
+    });
+    return { id, name: coName, prefix: id + "_", areas: areaData.map(a => a.name), fixedUsers,
+      rotationOrder: fixedUsers.filter(u => u.area === areaData[0]?.name).map(u => u.id),
+      rotatingTasks: [], fixedTasks: [], anchorTaskOffset: 0,
+      hasPlancha: false, planchaExclude: null, kitchenArea: areaData[0]?.name || "" };
+  }
+
+  function next() {
+    const v = curVal.trim();
+    if (step === 0) { if (v) { setCurVal(""); setStep(1); } return; }
+    if (step === 1) { if (parseInt(curVal) > 0) { setCurVal(""); setStep(2); } return; }
+    if (step === 2) { if (parseInt(curVal) > 0) { setCurVal(""); setStep(3); } return; }
+
+    if (isNameStep) {
+      const name = v || `Puesto ${areaIdx + 1}`;
+      const updated = [...areaData];
+      updated[areaIdx] = { name, count: updated[areaIdx]?.count || 0 };
+      setAreaData(updated);
+      setCurVal("");
+      if (isLastArea) {
+        // auto assign count and go to loading
+        updated[areaIdx] = { name, count: leftover };
+        setAreaData(updated);
+        setStep(finalStep);
+        startLoading();
+      } else {
+        setStep(step + 1); // go to count step
+      }
+      return;
+    }
+
+    if (isCountStep) {
+      const count = parseInt(curVal) || 0;
+      if (count <= 0) return;
+      const updated = [...areaData];
+      updated[areaIdx] = { ...updated[areaIdx], count };
+      setAreaData(updated);
+      setCurVal("");
+      setStep(step + 1); // go to next area name step
+      return;
+    }
+  }
+
+  function back() {
+    if (step === 0) return;
+    setCurVal("");
+    setStep(s => s - 1);
+  }
+
+  // Determine question
+  const question = (() => {
+    if (step === 0) return "¿Cómo se llama tu empresa?";
+    if (step === 1) return `¿Cuántas personas trabajan en ${coName}?`;
+    if (step === 2) return "¿Cuántas áreas o puestos distintos tiene?";
+    if (isNameStep) {
+      if (areaIdx === 0) return "¿Cómo se llama el primer puesto?";
+      if (isLastArea) return `¿Cómo se llama el último puesto?`;
+      return `¿Cómo se llama el siguiente puesto?`;
+    }
+    if (isCountStep) {
+      return `¿Cuántas personas trabajan en ${areaData[areaIdx]?.name || "ese puesto"}?`;
+    }
+    return "";
+  })();
+
+  const hint = (() => {
+    if (step === 2) return "Ej: Cocina y Caja serían 2";
+    if (isNameStep && isLastArea) return `Se asignan ${leftover} personas automáticamente`;
+    if (isCountStep) {
+      const rem = leftover;
+      return `Quedan ${rem} personas por asignar`;
+    }
+    return "";
+  })();
+
+  const canContinue = (() => {
+    if (step === 0) return curVal.trim().length > 0;
+    if (step === 1) return parseInt(curVal) > 0;
+    if (step === 2) return parseInt(curVal) > 0;
+    if (isNameStep) return true; // can be empty, we auto-name
+    if (isCountStep) return parseInt(curVal) > 0;
+    return false;
+  })();
+
+  // Sync coName/total/numAreas from curVal when moving forward
+  // We store answers inline in state before moving
+  const handleCurValChange = (v) => {
+    setCurVal(v);
+    if (step === 0) setCoName(v);
+    if (step === 1) setTotal(v);
+    if (step === 2) setNumAreas(v);
+  };
+
+  const inputType = (step === 1 || step === 2 || isCountStep) ? "number" : "text";
+
+  return (
+    <div className="modal-bg" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()}
+        style={{width: 400, background: D.bg2, border: `1px solid ${D.border}`, padding: 0, overflow: "hidden"}}>
+
+        {/* Header */}
+        <div style={{padding: "14px 18px 10px", borderBottom: `1px solid ${D.border}`, display: "flex", alignItems: "center", justifyContent: "space-between"}}>
+          <span style={{fontSize: 14, fontWeight: 600, color: D.text}}>Nueva empresa</span>
+          <button className="btn" onClick={onClose} style={{background: "none", color: D.text2, fontSize: 17, padding: "2px 6px", lineHeight: 1}}>×</button>
+        </div>
+
+        {/* Progress */}
+        <div style={{height: 3, background: D.border}}>
+          <div style={{height: 3, background: D.tabActive, width: `${progress}%`, transition: "width .4s", borderRadius: 3}}/>
+        </div>
+
+        <div style={{padding: "26px 22px 22px"}}>
+          {!isLoading && <>
+            <p style={{fontSize: 16, fontWeight: 500, color: D.text, marginBottom: hint ? 6 : 18, lineHeight: 1.4}}>{question}</p>
+            {hint && <p style={{fontSize: 12, color: D.text2, marginBottom: 14}}>{hint}</p>}
+
+            <input
+              key={step}
+              autoFocus
+              value={curVal}
+              onChange={e => handleCurValChange(e.target.value)}
+              type={inputType}
+              inputMode={inputType === "number" ? "numeric" : "text"}
+              placeholder=""
+              onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter" && canContinue) next(); }}
+              style={{fontSize: 15, padding: "12px 14px", borderRadius: 8, border: `1.5px solid ${D.border}`,
+                background: D.input, color: D.text, width: "100%", outline: "none", fontFamily: "inherit"}}
+            />
+
+            <div style={{marginTop: 20, display: "flex", justifyContent: "space-between", alignItems: "center"}}>
+              {step > 0
+                ? <button className="btn" onClick={back} style={{background: "none", color: D.text2, fontSize: 13, padding: 0, border: "none"}}>← Volver</button>
+                : <span/>}
+              <button className="btn" onClick={next} disabled={!canContinue}
+                style={{padding: "9px 22px", borderRadius: 7, fontSize: 13, fontWeight: 500,
+                  background: canContinue ? D.tabActive : D.bg3,
+                  color: canContinue ? D.tabActiveText : D.text2,
+                  border: "none", opacity: canContinue ? 1 : 0.5, cursor: canContinue ? "pointer" : "default"}}>
+                {isNameStep && isLastArea ? "Crear equipo →" : "Continuar →"}
+              </button>
+            </div>
+          </>}
+
+          {isLoading && <>
+            <p style={{fontSize: 15, fontWeight: 500, color: D.text, marginBottom: 20}}>
+              {done ? "¡Todo listo!" : "Perfecto, estamos creando todo..."}
+            </p>
+            <div style={{height: 8, background: D.border, borderRadius: 4, overflow: "hidden", marginBottom: 12}}>
+              <div style={{height: 8, background: D.tabActive, width: `${loadPct}%`, transition: "width .06s", borderRadius: 4}}/>
+            </div>
+            <p style={{fontSize: 12, color: D.text2}}>
+              {loadPct < 30 ? "Armando la estructura..." : loadPct < 65 ? "Creando los puestos..." : loadPct < 90 ? "Asignando personas..." : "¡Casi listo!"}
+            </p>
+          </>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 function TemplateModal({ templates, setTemplates, wo, monthRef, currentWeekLabel, onSave, onApplyWeek, onApplyMonth, onClose }) {
   const [view,      setView]      = useState("list"); // "list" | "save" | "apply"
   const [saveName,  setSaveName]  = useState(`WK${templates.length+1}`);
