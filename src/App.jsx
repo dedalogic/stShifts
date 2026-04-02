@@ -1100,7 +1100,7 @@ export default function App() {
       {profileUser && <ProfileModal user={profileUser} users={users} shifts={shifts} schedule={schedule} dark={dark} company={company} pfx={pfx}
         onClose={()=>setProfileUser(null)} onEdit={u=>{ setEditUser(u); setUserModal(true); setProfileUser(null); }} />}
 
-      {userModal && <UserModal initial={editUser} dark={dark} isFixed={editUser?FIXED_USERS.some(f=>f.id===editUser.id):false}
+      {userModal && <UserModal initial={editUser} dark={dark} isFixed={editUser?FIXED_USERS.some(f=>f.id===editUser.id):false} companyAreas={company.areas}
         onSave={u=>{
           if(editUser){ if(FIXED_USERS.some(f=>f.id===editUser.id)){ setExtra(p=>{ const ex=p.find(x=>x.id===editUser.id); return ex?p.map(x=>x.id===editUser.id?{...x,...u}:x):[...p,{...editUser,...u}]; }); } else setExtra(p=>p.map(x=>x.id===editUser.id?{...x,...u}:x)); }
           else setExtra(p=>[...p,{...u,id:`ux${Date.now()}`}]);
@@ -1670,10 +1670,14 @@ function TasksTab({ users, schedule, dark, company, pfx }) {
       <div style={{fontSize:10,color:D.text3,marginBottom:28,paddingLeft:2}}>Solo aparecen personas con turno asignado ese día.</div>
 
       {/* ── ROTATIVAS ── */}
-      <SectionTitle>Tareas rotativas</SectionTitle>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,marginTop:28}}>
+        <SectionTitle style={{margin:0}}>Tareas rotativas</SectionTitle>
+        <button className="btn" onClick={()=>setRotNames(p=>[...p,`Nueva tarea ${p.length+1}`])}
+          style={{fontSize:11,padding:"4px 10px",borderRadius:5,background:D.bg3,color:D.text,border:`1px solid ${D.border}`}}>+ Agregar</button>
+      </div>
       <div style={{border:`1px solid ${D.border}`,borderRadius:10,overflow:"hidden",marginBottom:6}}>
         <table style={{width:"100%",borderCollapse:"collapse"}}>
-          <thead><tr><TH w="45%">Tarea</TH><TH>Persona</TH><TH w="20%">Cargo</TH></tr></thead>
+          <thead><tr><TH w="45%">Tarea</TH><TH>Persona</TH><TH w="80px"></TH></tr></thead>
           <tbody>
             {rotNames.map((taskName,i)=>{
               const assignedId=Object.keys(rotating).find(uid=>rotating[uid]===taskName);
@@ -1689,24 +1693,33 @@ function TasksTab({ users, schedule, dark, company, pfx }) {
                             style={{fontSize:12,padding:"3px 7px",borderRadius:4,width:"100%"}}/>
                           <button className="btn" onClick={()=>saveEdit("rot",i)} style={{background:D.tabActive,color:D.tabActiveText,fontSize:11,padding:"3px 8px",borderRadius:4,flexShrink:0}}>ok</button>
                         </div>
-                      : <span style={{cursor:"default"}} onDoubleClick={()=>startEdit("rot",i,taskName)}>{taskName}</span>}
+                      : <span style={{cursor:"pointer"}} onClick={()=>startEdit("rot",i,taskName)}>{taskName}</span>}
                   </td>
                   <td style={{padding:"9px 14px",fontSize:12}}>{u?<div style={{display:"flex",alignItems:"center",gap:8}}><Av name={u.name} color={u.color} size={22}/><span style={{fontWeight:500,color:D.text}}>{u.name}</span></div>:<span style={{color:D.text3}}>—</span>}</td>
-                  <td style={{padding:"9px 14px",fontSize:12,color:D.text2}}>{u?.role||"—"}</td>
+                  <td style={{padding:"6px 10px",textAlign:"right"}}>
+                    <button className="btn" onClick={()=>setRotNames(p=>p.filter((_,j)=>j!==i))}
+                      style={{background:"none",border:`1px solid ${D.border}`,color:"#9B2335",padding:"3px 7px",borderRadius:4,display:"inline-flex"}}>
+                      <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M1.5 3h9M4.5 3V2h3v1M5 5.5v3M7 5.5v3M2.5 3l.5 7h6l.5-7" stroke="#9B2335" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                    </button>
+                  </td>
                 </tr>
               );
             })}
           </tbody>
         </table>
       </div>
-      <div style={{fontSize:10,color:D.text3,marginBottom:28,paddingLeft:2}}>Doble clic en el nombre de la tarea para renombrarla.</div>
+      <div style={{fontSize:10,color:D.text3,marginBottom:28,paddingLeft:2}}>Clic en el nombre de la tarea para renombrarla.</div>
 
       {/* ── FIJAS ── */}
-      {fixNames.length>0 && (<>
-      <SectionTitle>Tareas fijas</SectionTitle>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,marginTop:28}}>
+        <SectionTitle style={{margin:0}}>Tareas fijas</SectionTitle>
+        <button className="btn" onClick={()=>setFixNames(p=>[...p,`Tarea fija ${p.length+1}`])}
+          style={{fontSize:11,padding:"4px 10px",borderRadius:5,background:D.bg3,color:D.text,border:`1px solid ${D.border}`}}>+ Agregar</button>
+      </div>
+      {fixNames.length>0 && (
       <div style={{border:`1px solid ${D.border}`,borderRadius:10,overflow:"hidden",marginBottom:6}}>
         <table style={{width:"100%",borderCollapse:"collapse"}}>
-          <thead><tr><TH w="45%">Tarea</TH><TH>Persona</TH><TH w="20%">Cargo</TH></tr></thead>
+          <thead><tr><TH w="45%">Tarea</TH><TH>Persona</TH><TH w="80px"></TH></tr></thead>
           <tbody>
             {fixNames.map((taskName,i)=>{
               const assignedId=Object.keys(fixed).find(uid=>fixed[uid]===taskName);
@@ -1722,18 +1735,24 @@ function TasksTab({ users, schedule, dark, company, pfx }) {
                             style={{fontSize:12,padding:"3px 7px",borderRadius:4,width:"100%"}}/>
                           <button className="btn" onClick={()=>saveEdit("fix",i)} style={{background:D.tabActive,color:D.tabActiveText,fontSize:11,padding:"3px 8px",borderRadius:4,flexShrink:0}}>ok</button>
                         </div>
-                      : <span style={{cursor:"default"}} onDoubleClick={()=>startEdit("fix",i,taskName)}>{taskName}</span>}
+                      : <span style={{cursor:"pointer"}} onClick={()=>startEdit("fix",i,taskName)}>{taskName}</span>}
                   </td>
                   <td style={{padding:"9px 14px",fontSize:12}}>{u?<div style={{display:"flex",alignItems:"center",gap:8}}><Av name={u.name} color={u.color} size={22}/><span style={{fontWeight:500,color:D.text}}>{u.name}</span></div>:<span style={{color:D.text3}}>—</span>}</td>
-                  <td style={{padding:"9px 14px",fontSize:12,color:D.text2}}>{u?.role||"—"}</td>
+                  <td style={{padding:"6px 10px",textAlign:"right"}}>
+                    <button className="btn" onClick={()=>setFixNames(p=>p.filter((_,j)=>j!==i))}
+                      style={{background:"none",border:`1px solid ${D.border}`,color:"#9B2335",padding:"3px 7px",borderRadius:4,display:"inline-flex"}}>
+                      <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M1.5 3h9M4.5 3V2h3v1M5 5.5v3M7 5.5v3M2.5 3l.5 7h6l.5-7" stroke="#9B2335" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                    </button>
+                  </td>
                 </tr>
               );
             })}
           </tbody>
         </table>
       </div>
-      <div style={{fontSize:10,color:D.text3,paddingLeft:2}}>Doble clic en el nombre de la tarea para renombrarla.</div>
-      </>)}
+      )}
+      {fixNames.length===0 && <div style={{padding:"12px 14px",borderRadius:8,border:`1px dashed ${D.border}`,fontSize:12,color:D.text3,marginBottom:6}}>Sin tareas fijas. Pulsa "+ Agregar" para crear una.</div>}
+      <div style={{fontSize:10,color:D.text3,paddingLeft:2,marginBottom:28}}>Clic en el nombre de la tarea para renombrarla.</div>
     </div>
   );
 }
@@ -2496,23 +2515,36 @@ function PickerModal({ context, users, shifts, dark, onPick, onClose }) {
   );
 }
 
-function UserModal({ initial, isFixed, dark, onSave, onClose }) {
+function UserModal({ initial, isFixed, dark, onSave, onClose, companyAreas }) {
   const D=getD(dark);
-  const [name,setName]=useState(initial?.name||""); const [role,setRole]=useState(initial?.role||"");
-  const [area,setArea]=useState(initial?.area||"Cocina"); const [color,setColor]=useState(initial?.color||PALETTE[0]);
+  const areas = companyAreas || ["Cocina","Caja"];
+  const [name,setName]=useState(initial?.name||"");
+  const [role,setRole]=useState(initial?.role||"");
+  const [area,setArea]=useState(initial?.area||areas[0]||"");
+  const [color,setColor]=useState(initial?.color||PALETTE[0]);
+  const canSave = name.trim() && role.trim() && area;
   return (
     <div className="modal-bg" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()} style={{background:D.bg2,border:`1px solid ${D.border}`}}>
       <div style={{fontSize:15,fontWeight:700,color:D.text,marginBottom:20}}>{initial?"Editar persona":"Nueva persona"}</div>
-      <span className="lbl">Nombre</span><input value={name} onChange={e=>setName(e.target.value)} placeholder="Nombre completo" autoFocus disabled={isFixed&&!initial?.name?.includes("test")}/>
-      <span className="lbl">Cargo</span><input value={role} onChange={e=>setRole(e.target.value)} placeholder="Ej: Cajera, Cocinera..."/>
-      <span className="lbl">Área</span><select value={area} onChange={e=>setArea(e.target.value)} disabled={isFixed}>{AREAS.map(a=><option key={a} value={a}>{a}</option>)}</select>
+      <span className="lbl">Nombre</span>
+      <input value={name} onChange={e=>setName(e.target.value)} placeholder="Nombre completo" autoFocus/>
+      <span className="lbl">Cargo</span>
+      <input value={role} onChange={e=>setRole(e.target.value)} placeholder="Ej: Cajera, Cocinera..."/>
+      <span className="lbl">Área</span>
+      <select value={area} onChange={e=>setArea(e.target.value)}>
+        {areas.map(a=><option key={a} value={a}>{a}</option>)}
+      </select>
       <span className="lbl">Color</span>
       <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:6}}>
         {PALETTE.map(c=><button key={c} className="btn" onClick={()=>setColor(c)} style={{width:22,height:22,borderRadius:"50%",background:c,border:color===c?`2.5px solid ${D.text}`:"2px solid transparent",outline:color===c?`2px solid ${D.bg2}`:"none",outlineOffset:"-4px"}}/>)}
       </div>
-      <div style={{display:"flex",gap:8,marginTop:22}}>
+      {!canSave && <p style={{fontSize:11,color:"#9B2335",marginTop:10}}>Nombre, cargo y área son obligatorios.</p>}
+      <div style={{display:"flex",gap:8,marginTop:16}}>
         <button className="btn" onClick={onClose} style={{flex:1,background:D.bg3,color:D.text,padding:"9px",borderRadius:6,fontSize:13}}>Cancelar</button>
-        <button className="btn" onClick={()=>{if(name.trim()) onSave({name:name.trim(),role:role.trim(),area,color});}} style={{flex:1,background:D.tabActive,color:D.tabActiveText,padding:"9px",borderRadius:6,fontSize:13,fontWeight:500}}>{initial?"Guardar":"Agregar"}</button>
+        <button className="btn" onClick={()=>{ if(canSave) onSave({name:name.trim(),role:role.trim(),area,color}); }}
+          style={{flex:1,background:canSave?D.tabActive:D.bg3,color:canSave?D.tabActiveText:D.text2,padding:"9px",borderRadius:6,fontSize:13,fontWeight:500,opacity:canSave?1:.5}}>
+          {initial?"Guardar":"Agregar"}
+        </button>
       </div>
     </div></div>
   );
