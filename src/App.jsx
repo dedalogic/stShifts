@@ -1547,13 +1547,49 @@ function TasksTab({ users, schedule, dark, company, pfx }) {
     return result;
   }
 
-  const rotating=getRotAssignment(wo);
   const fixed=getFixAssignment(wo);
 
   function startEdit(type,i,val){ if(type==="rot"){setEditingRot(i);setEditingFix(null);}else{setEditingFix(i);setEditingRot(null);} setEditVal(val); }
   function saveEdit(type,i){ if(type==="rot"){setRotNames(p=>{const a=[...p];a[i]=editVal.trim()||p[i];return a;});setEditingRot(null);}else{setFixNames(p=>{const a=[...p];a[i]=editVal.trim()||p[i];return a;});setEditingFix(null);} }
 
   function setColDay(dateKey,uid){ setColacion(p=>({...p,[dateKey]:uid})); }
+
+  const [dragUid, setDragUid]       = useState(null);
+  const [dropTarget, setDropTarget] = useState(null);
+  const [rotOffset, setRotOffset]   = useState(()=>parseInt(localStorage.getItem(pfx+"rot_offset")||0)||company.anchorTaskOffset||0);
+
+  useEffect(()=>{ localStorage.setItem(pfx+"rot_offset", String(rotOffset)); },[rotOffset,pfx]);
+
+  function getRotAssignmentOff(wo2, offset){
+    const n=rotNames.length; if(!n) return {};
+    const result={};
+    rotOrder.forEach((uid,ui)=>{ result[uid]=rotNames[((offset+ui+wo2)%n+n)%n]; });
+    return result;
+  }
+
+  function dropOnRot(taskIdx) {
+    if(dragUid==null) return;
+    const userIdx=rotOrder.indexOf(dragUid); if(userIdx<0) return;
+    const n=rotNames.length;
+    const newOffset=((taskIdx-userIdx-wo)%n+n*100)%n;
+    setRotOffset(newOffset); setDragUid(null); setDropTarget(null);
+  }
+
+  function dropOnFix(taskIdx) {
+    if(dragUid==null) return;
+    const draggedUserIdx=rotOrder.indexOf(dragUid); if(draggedUserIdx<0) return;
+    setFixNames(prev=>{
+      const next=[...prev];
+      const from=draggedUserIdx%next.length;
+      const dragged=next.splice(from,1)[0];
+      const to=taskIdx>from?taskIdx-1:taskIdx;
+      next.splice(to,0,dragged);
+      return next;
+    });
+    setDragUid(null); setDropTarget(null);
+  }
+
+  const rotating = getRotAssignmentOff(wo, rotOffset);
 
   // Table header component
   const TH=({children,w})=>(
@@ -1669,22 +1705,17 @@ function TasksTab({ users, schedule, dark, company, pfx }) {
       </div>
       <div style={{fontSize:10,color:D.text3,marginBottom:28,paddingLeft:2}}>Solo aparecen personas con turno asignado ese día.</div>
 
-      {/* ── ROTATIVAS ── */}
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,marginTop:28}}>
-        <SectionTitle style={{margin:0}}>Tareas rotativas</SectionTitle>
-        <button className="btn" onClick={()=>setRotNames(p=>[...p,`Nueva tarea ${p.length+1}`])}
-          style={{fontSize:11,padding:"4px 10px",borderRadius:5,background:D.bg3,color:D.text,border:`1px solid ${D.border}`}}>+ Agregar</button>
-      </div>
       <div style={{border:`1px solid ${D.border}`,borderRadius:10,overflow:"hidden",marginBottom:6}}>
         <table style={{width:"100%",borderCollapse:"collapse"}}>
-          <thead><tr><TH w="45%">Tarea</TH><TH>Persona</TH><TH w="80px"></TH></tr></thead>
+          <thead><tr><TH w="45%">Tarea</TH><TH>Persona esta semana</TH><TH w="80px"></TH></tr></thead>
           <tbody>
             {rotNames.map((taskName,i)=>{
               const assignedId=Object.keys(rotating).find(uid=>rotating[uid]===taskName);
               const u=kitchenUsers.find(x=>x.id===assignedId);
               const isEditing=editingRot===i;
+              const isOver=dropTarget?.type==="rot"&&dropTarget?.idx===i;
               return (
-                <tr key={i} className="task-row" style={{borderBottom:i<rotNames.length-1?`1px solid ${D.border}`:"none"}}>
+                <tr key={i} className="task-row" style={{borderBottom:i<rotNames.length-1?`1px solid ${D.border}`:"none",background:isOver?(dark?"#1A2A1A":"#F0FAF4"):"transparent",transition:"background .15s"}}>
                   <td style={{padding:"9px 14px",fontSize:12,color:D.text}}>
                     {isEditing
                       ? <div style={{display:"flex",gap:6,alignItems:"center"}}>
@@ -1695,7 +1726,18 @@ function TasksTab({ users, schedule, dark, company, pfx }) {
                         </div>
                       : <span style={{cursor:"pointer"}} onClick={()=>startEdit("rot",i,taskName)}>{taskName}</span>}
                   </td>
-                  <td style={{padding:"9px 14px",fontSize:12}}>{u?<div style={{display:"flex",alignItems:"center",gap:8}}><Av name={u.name} color={u.color} size={22}/><span style={{fontWeight:500,color:D.text}}>{u.name}</span></div>:<span style={{color:D.text3}}>—</span>}</td>
+                  <td style={{padding:"7px 14px",fontSize:12}}
+                    onDragOver={e=>{e.preventDefault();setDropTarget({type:"rot",idx:i});}}
+                    onDragLeave={()=>setDropTarget(null)}
+                    onDrop={()=>dropOnRot(i)}>
+                    {u
+                      ? <div draggable onDragStart={()=>setDragUid(u.id)} onDragEnd={()=>setDragUid(null)}
+                          style={{display:"inline-flex",alignItems:"center",gap:8,cursor:"grab",padding:"2px 6px 2px 2px",borderRadius:6,border:`1px solid ${dragUid===u.id?D.tabActive:"transparent"}`,background:dragUid===u.id?(dark?"#1A2A3A":"#EEF3FF"):"transparent",userSelect:"none"}}>
+                          <Av name={u.name} color={u.color} size={22}/>
+                          <span style={{fontWeight:500,color:D.text}}>{u.name}</span>
+                        </div>
+                      : <span style={{color:D.text3,fontSize:11}}>Arrastra una persona aquí</span>}
+                  </td>
                   <td style={{padding:"6px 10px",textAlign:"right"}}>
                     <button className="btn" onClick={()=>setRotNames(p=>p.filter((_,j)=>j!==i))}
                       style={{background:"none",border:`1px solid ${D.border}`,color:"#9B2335",padding:"3px 7px",borderRadius:4,display:"inline-flex"}}>
@@ -1708,7 +1750,9 @@ function TasksTab({ users, schedule, dark, company, pfx }) {
           </tbody>
         </table>
       </div>
-      <div style={{fontSize:10,color:D.text3,marginBottom:28,paddingLeft:2}}>Clic en el nombre de la tarea para renombrarla.</div>
+      <div style={{fontSize:11,color:D.text2,marginBottom:28,paddingLeft:2,lineHeight:1.5}}>
+        Puedes arrastrar una persona a otra tarea para cambiar el turno de esta semana. · Cada semana la rotación avanza automáticamente: la persona que tenía una tarea pasa a la siguiente.
+      </div>
 
       {/* ── FIJAS ── */}
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,marginTop:28}}>
@@ -1719,14 +1763,15 @@ function TasksTab({ users, schedule, dark, company, pfx }) {
       {fixNames.length>0 && (
       <div style={{border:`1px solid ${D.border}`,borderRadius:10,overflow:"hidden",marginBottom:6}}>
         <table style={{width:"100%",borderCollapse:"collapse"}}>
-          <thead><tr><TH w="45%">Tarea</TH><TH>Persona</TH><TH w="80px"></TH></tr></thead>
+          <thead><tr><TH w="45%">Tarea</TH><TH>Persona asignada</TH><TH w="80px"></TH></tr></thead>
           <tbody>
             {fixNames.map((taskName,i)=>{
               const assignedId=Object.keys(fixed).find(uid=>fixed[uid]===taskName);
               const u=kitchenUsers.find(x=>x.id===assignedId);
               const isEditing=editingFix===i;
+              const isOver=dropTarget?.type==="fix"&&dropTarget?.idx===i;
               return (
-                <tr key={i} className="task-row" style={{borderBottom:i<fixNames.length-1?`1px solid ${D.border}`:"none"}}>
+                <tr key={i} className="task-row" style={{borderBottom:i<fixNames.length-1?`1px solid ${D.border}`:"none",background:isOver?(dark?"#1A2A1A":"#F0FAF4"):"transparent",transition:"background .15s"}}>
                   <td style={{padding:"9px 14px",fontSize:12,color:D.text}}>
                     {isEditing
                       ? <div style={{display:"flex",gap:6,alignItems:"center"}}>
@@ -1737,7 +1782,18 @@ function TasksTab({ users, schedule, dark, company, pfx }) {
                         </div>
                       : <span style={{cursor:"pointer"}} onClick={()=>startEdit("fix",i,taskName)}>{taskName}</span>}
                   </td>
-                  <td style={{padding:"9px 14px",fontSize:12}}>{u?<div style={{display:"flex",alignItems:"center",gap:8}}><Av name={u.name} color={u.color} size={22}/><span style={{fontWeight:500,color:D.text}}>{u.name}</span></div>:<span style={{color:D.text3}}>—</span>}</td>
+                  <td style={{padding:"7px 14px",fontSize:12}}
+                    onDragOver={e=>{e.preventDefault();setDropTarget({type:"fix",idx:i});}}
+                    onDragLeave={()=>setDropTarget(null)}
+                    onDrop={()=>dropOnFix(i)}>
+                    {u
+                      ? <div draggable onDragStart={()=>setDragUid(u.id)} onDragEnd={()=>setDragUid(null)}
+                          style={{display:"inline-flex",alignItems:"center",gap:8,cursor:"grab",padding:"2px 6px 2px 2px",borderRadius:6,border:`1px solid ${dragUid===u.id?D.tabActive:"transparent"}`,background:dragUid===u.id?(dark?"#1A2A3A":"#EEF3FF"):"transparent",userSelect:"none"}}>
+                          <Av name={u.name} color={u.color} size={22}/>
+                          <span style={{fontWeight:500,color:D.text}}>{u.name}</span>
+                        </div>
+                      : <span style={{color:D.text3,fontSize:11}}>Arrastra una persona aquí</span>}
+                  </td>
                   <td style={{padding:"6px 10px",textAlign:"right"}}>
                     <button className="btn" onClick={()=>setFixNames(p=>p.filter((_,j)=>j!==i))}
                       style={{background:"none",border:`1px solid ${D.border}`,color:"#9B2335",padding:"3px 7px",borderRadius:4,display:"inline-flex"}}>
