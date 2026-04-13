@@ -342,7 +342,7 @@ export default function App() {
   const [hidden,   setHidden]   = useState(()=>safeGet(pfx+"hidden", []));
   const [shifts,   setShifts]   = useState(()=>safeGet(pfx+"shifts", DEFAULT_SHIFTS));
   const [schedule, setSchedule] = useState(()=>safeGet(pfx+"schedule", {}));
-  const [wo,       setWo]       = useState(0);
+  const [wo,       setWo]       = useState(()=>parseInt(localStorage.getItem("so_wo")||"0"));
   const [view,     setView]     = useState("week");
   const [tab,      setTab]      = useState("schedule");
   const [areaF,    setAreaF]    = useState("Todas");
@@ -420,6 +420,7 @@ export default function App() {
   const wSched = schedule[wk]||{};
 
   useEffect(()=>{ localStorage.setItem("so_company", companyId); },[companyId]);
+  useEffect(()=>{ localStorage.setItem("so_wo", String(wo)); },[wo]);
   useEffect(()=>{ safeSet("so_hidden_companies", hiddenCompanies); },[hiddenCompanies]);
 
   useEffect(()=>{ safeSet(pfx+"extra",    extra);    },[extra,pfx]);
@@ -501,7 +502,6 @@ export default function App() {
     setTemplates(newTemplates);
     setCompanyId(newId);
     setAreaF("Todas");
-    setWo(0);
     setPicker(null);
     setDragging(null);
     setGhostPos(null);
@@ -1067,7 +1067,7 @@ export default function App() {
         onSave={saveAsTemplate}
         onApplyWeek={(tpl,wo2)=>applyTemplate(tpl,wo2)}
         onApplyMonth={(tpl,y,m)=>applyTemplateMonth(tpl,y,m)}
-        onClose={()=>setTemplateModal(false)} />}}
+        onClose={()=>setTemplateModal(false)} />}
 
       {wizardOpen && <WizardModal dark={dark} onClose={()=>setWizardOpen(false)}
         onComplete={(co)=>{
@@ -1531,8 +1531,12 @@ function TasksTab({ users, schedule, dark, company, pfx }) {
   useEffect(()=>{ localStorage.setItem(pfx+"colacion", JSON.stringify(colacion));  },[colacion,pfx]);
   useEffect(()=>{ localStorage.setItem(pfx+"plancha",  JSON.stringify(planchaOverride)); },[planchaOverride,pfx]);
 
-  const rotOrder = company.rotationOrder;
-  const kitchenUsers = rotOrder.map(id=>users.find(u=>u.id===id)).filter(Boolean);
+  const rotOrder = company.rotationOrder || [];
+  const kitchenAreaName = company.kitchenArea || company.areas?.[0] || "Cocina";
+  const kitchenFromOrder = rotOrder.map(id=>users.find(u=>u.id===id)).filter(Boolean);
+  const kitchenUsers = kitchenFromOrder.length > 0
+    ? kitchenFromOrder
+    : users.filter(u=>u.area===kitchenAreaName);
   const planchaUsers = company.hasPlancha ? kitchenUsers.filter(u=>u.id!==company.planchaExclude) : [];
   const dates = weekDates(wo);
 
@@ -1563,21 +1567,21 @@ function TasksTab({ users, schedule, dark, company, pfx }) {
   function getRotAssignmentOff(wo2, offset){
     const n=rotNames.length; if(!n) return {};
     const result={};
-    rotOrder.forEach((uid,ui)=>{ result[uid]=rotNames[((offset+ui+wo2)%n+n)%n]; });
+    kitchenUsers.forEach((u,ui)=>{ result[u.id]=rotNames[((offset+ui+wo2)%n+n)%n]; });
     return result;
   }
 
   function dropOnRot(taskIdx) {
     if(dragUid==null) return;
-    const userIdx=rotOrder.indexOf(dragUid); if(userIdx<0) return;
-    const n=rotNames.length;
+    const userIdx=kitchenUsers.findIndex(u=>u.id===dragUid); if(userIdx<0) return;
+    const n=rotNames.length; if(!n) return;
     const newOffset=((taskIdx-userIdx-wo)%n+n*100)%n;
     setRotOffset(newOffset); setDragUid(null); setDropTarget(null);
   }
 
   function dropOnFix(taskIdx) {
     if(dragUid==null) return;
-    const draggedUserIdx=rotOrder.indexOf(dragUid); if(draggedUserIdx<0) return;
+    const draggedUserIdx=kitchenUsers.findIndex(u=>u.id===dragUid); if(draggedUserIdx<0) return;
     setFixNames(prev=>{
       const next=[...prev];
       const from=draggedUserIdx%next.length;
