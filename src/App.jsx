@@ -164,11 +164,14 @@ const t2m = t => { if(!t) return 0; const [h,m]=t.split(":").map(Number); return
 const shiftH = s => { let a=t2m(s.start),b=t2m(s.end); if(b<=a) b+=1440; return (b-a-RULES.BREAK_MIN)/60; };
 const isSpec = v => v && Object.values(SPECIAL).some(s=>s.id===v);
 const getSpec = v => Object.values(SPECIAL).find(s=>s.id===v);
-const wKey = wo => `w${wo}`;
-
+// wKey uses the absolute Monday date as key so data never shifts with "today"
 function getMonday(wo) {
   const n=new Date(), m=new Date(n);
   m.setDate(n.getDate()-((n.getDay()+6)%7)+wo*7); m.setHours(0,0,0,0); return m;
+}
+function wKey(wo) {
+  const m=getMonday(wo);
+  return `w${m.getFullYear()}-${String(m.getMonth()+1).padStart(2,'0')}-${String(m.getDate()).padStart(2,'0')}`;
 }
 function weekLabel(wo) {
   const m=getMonday(wo), s=new Date(m); s.setDate(m.getDate()+6);
@@ -180,8 +183,8 @@ function weekDates(wo) {
   return DAYS.map((_,i)=>{ const d=new Date(m); d.setDate(m.getDate()+i); return d; });
 }
 function dateToWO(date) {
-  const n=new Date(), cm=new Date(n);
-  cm.setDate(n.getDate()-((n.getDay()+6)%7)); cm.setHours(0,0,0,0);
+  const n=new Date(); 
+  const cm=new Date(n); cm.setDate(n.getDate()-((n.getDay()+6)%7)); cm.setHours(0,0,0,0);
   const tm=new Date(date); tm.setDate(date.getDate()-((date.getDay()+6)%7)); tm.setHours(0,0,0,0);
   return Math.round((tm-cm)/(7*24*3600*1000));
 }
@@ -1097,7 +1100,7 @@ export default function App() {
           } catch(e){ alert("Error al crear empresa: "+e.message); }
         }} />}
 
-      {profileUser && <ProfileModal user={profileUser} users={users} shifts={shifts} schedule={schedule} dark={dark} company={company} pfx={pfx}
+      {profileUser && <ProfileModal user={profileUser} users={users} shifts={shifts} schedule={schedule} dark={dark} company={company} pfx={pfx} initialWo={wo}
         onClose={()=>setProfileUser(null)} onEdit={u=>{ setEditUser(u); setUserModal(true); setProfileUser(null); }} />}
 
       {userModal && <UserModal initial={editUser} dark={dark} isFixed={editUser?FIXED_USERS.some(f=>f.id===editUser.id):false} companyAreas={company.areas}
@@ -1818,9 +1821,9 @@ function TasksTab({ users, schedule, dark, company, pfx }) {
 }
 
 // ─── PROFILE MODAL ────────────────────────────────────────────────────────────
-function ProfileModal({ user, users, shifts, schedule, dark, company, pfx, onClose, onEdit }) {
+function ProfileModal({ user, users, shifts, schedule, dark, company, pfx, onClose, onEdit, initialWo }) {
   const D = getD(dark);
-  const [wo, setWo] = useState(0);
+  const [wo, setWo] = useState(initialWo||0);
   const printRef = useRef();
   const wk = wKey(wo);
   const wSched = schedule[wk]||{};
