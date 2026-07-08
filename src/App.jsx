@@ -225,6 +225,140 @@ function loadExtra() { const r=localStorage.getItem("so_extra"); return r?JSON.p
 function loadShifts() { const r=localStorage.getItem("so_shifts"); return r?JSON.parse(r):DEFAULT_SHIFTS; }
 function loadSchedule() { const r=localStorage.getItem("so_schedule"); return r?JSON.parse(r):{}; }
 
+// ─── AUTO GENERATOR ───────────────────────────────────────────────────────────
+function analyzeHistory(schedule) {
+  const stats = {}; let weekCount = 0;
+  Object.keys(schedule).forEach(wk => {
+    const week = schedule[wk];
+    if (!week || Object.keys(week).length === 0) return;
+    weekCount++;
+    Object.entries(week).forEach(([key, val]) => {
+      const di = key.indexOf("-");
+      const day = key.slice(0, di), uid = key.slice(di + 1);
+      if (!stats[uid]) stats[uid] = {};
+      if (!stats[uid][day]) stats[uid][day] = {};
+      stats[uid][day][val] = (stats[uid][day][val] || 0) + 1;
+    });
+  });
+  return { stats, weekCount };
+}
+
+function contractHours(u) {
+  if (u.contractType === "pt20") return 20;
+  if (u.contractType === "pt30") return 30;
+  return 44;
+}
+
+function generateWeekProposal(schedule, users, shifts, customRules, currentWeek) {
+  const { stats, weekCount } = analyzeHistory(schedule);
+  if (weekCount === 0) return { proposal: null, reason: "No hay semanas guardadas para aprender." };
+
+  const proposal = {}; const hoursOf = {};
+  const getShiftH = val => { if (isSpec(val)) return 0; const s = shifts.find(x => x.id === val); return s ? shiftH(s) : 0; };
+
+  // 1. Fill from patterns
+  users.forEach(u => {
+    hoursOf[u.id] = 0;
+    DAYS.forEach(day => {
+      if (currentWeek[`${day}-${u.id}`]) { hoursOf[u.id] += getShiftH(currentWeek[`${day}-${u.id}`]); return; }
+      const freq = stats[u.id]?.[day];
+      if (!freq) return;
+      const sorted = Object.entries(freq).sort((a, b) => b[1] - a[1]);
+      const [topVal, topCount] = sorted[0];
+      if (topCount >= Math.max(2, Math.ceil(weekCount * 0.4))) {
+        proposal[`${day}-${u.id}`] = topVal;
+        hoursOf[u.id] += getShiftH(topVal);
+      }
+    });
+  });
+
+  // 2. Cap contract hours — drop weakest days
+  users.forEach(u => {
+    const cap = contractHours(u);
+    while (hoursOf[u.id] > cap) {
+      const entries = DAYS
+        .map(day => ({ day, key: `${day}-${u.id}`, val: proposal[`${day}-${u.id}`] }))
+        .filter(e => e.val && !isSpec(e.val))
+        .map(e => ({ ...e, freq: stats[u.id]?.[e.day]?.[e.val] || 0 }))
+        .sort((a, b) => a.freq - b.freq);
+      if (!entries.length) break;
+      const drop = entries[0];
+      hoursOf[u.id] -= getShiftH(drop.val);
+      delete proposal[drop.key];
+    }
+  });
+
+  // 3. Incompatibility repair
+  (customRules || []).filter(r => r.type === "incompatible" && r.active !== false).forEach(r => {
+    DAYS.forEach(day => {
+      const k1 = `${day}-${r.uid1}`, k2 = `${day}-${r.uid2}`;
+      const v1 = proposal[k1] || currentWeek[k1], v2 = proposal[k2] || currentWeek[k2];
+      if (v1 && v2 && !isSpec(v1) && !isSpec(v2)) {
+        if (proposal[k1] && (!proposal[k2] || hoursOf[r.uid1] >= hoursOf[r.uid2])) { hoursOf[r.uid1] -= getShiftH(proposal[k1]); delete proposal[k1]; }
+        else if (proposal[k2]) { hoursOf[r.uid2] -= getShiftH(proposal[k2]); delete proposal[k2]; }
+      }
+    });
+  });
+
+  // 4. Coverage boost
+  const covRules = (customRules || []).filter(r => r.type === "coverage" && r.active !== false && r.op === "min");
+  const defaultCov = covRules.length === 0;
+  DAYS.forEach((day, di) => {
+    const needs = defaultCov
+      ? [{ period: "am", value: 2 }, { period: "pm", value: di >= 4 ? 3 : 2 }]
+      : covRules.filter(r => r.day === "all" || r.day === day).map(r => ({ period: r.period, value: r.value }));
+
+    needs.forEach(need => {
+      let count = 0;
+      users.forEach(u => {
+        const v = proposal[`${day}-${u.id}`] || currentWeek[`${day}-${u.id}`];
+        if (!v || isSpec(v)) return;
+        const s = shifts.find(x => x.id === v); if (!s) return;
+        const isPM = t2m(s.start) / 60 >= 13;
+        if (need.period === "am" && !isPM) count++;
+        else if (need.period === "pm" && isPM) count++;
+        else if (need.period === "all") count++;
+      });
+      if (count < need.value) {
+        const candidates = users
+          .filter(u => !proposal[`${day}-${u.id}`] && !currentWeek[`${day}-${u.id}`])
+          .filter(u => hoursOf[u.id] < contractHours(u))
+          .map(u => {
+            const freq = stats[u.id]?.[day] || {};
+            const matching = Object.entries(freq).filter(([val]) => {
+              if (isSpec(val)) return false;
+              const s = shifts.find(x => x.id === val); if (!s) return false;
+              const isPM = t2m(s.start) / 60 >= 13;
+              return need.period === "all" || (need.period === "pm" ? isPM : !isPM);
+            }).sort((a, b) => b[1] - a[1]);
+            return { u, shiftVal: matching[0]?.[0] || null, freq: matching[0]?.[1] || 0, missing: contractHours(u) - hoursOf[u.id] };
+          })
+          .sort((a, b) => b.missing - a.missing || b.freq - a.freq);
+
+        for (const c of candidates) {
+          if (count >= need.value) break;
+          let val = c.shiftVal;
+          if (!val) {
+            const s = shifts.find(x => (need.period === "pm" ? t2m(x.start)/60 >= 13 : t2m(x.start)/60 < 13));
+            val = s?.id || null;
+          }
+          if (!val) continue;
+          const h = getShiftH(val);
+          if (hoursOf[c.u.id] + h > contractHours(c.u)) continue;
+          proposal[`${day}-${c.u.id}`] = val;
+          hoursOf[c.u.id] += h;
+          count++;
+        }
+      }
+    });
+  });
+
+  const count = Object.keys(proposal).length;
+  return count > 0
+    ? { proposal, reason: null, weekCount, count }
+    : { proposal: null, reason: "No se encontraron patrones suficientes en el historial." };
+}
+
 // ─── RULE ENGINE ──────────────────────────────────────────────────────────────
 // Rule types:
 //   coverage   : {type:"coverage", day:"Lunes"|"all", period:"am"|"pm"|"all", op:"min"|"max", value:N, severity, active}
@@ -365,6 +499,7 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [reportModal, setReportModal] = useState(false);
   const [templateModal, setTemplateModal] = useState(false);
+  const [proposal, setProposal] = useState(null); // {`day-uid`: val} — auto-generated draft
   const [wizardOpen, setWizardOpen] = useState(false);
   const [hiddenCompanies, setHiddenCompanies] = useState(()=>safeGet("so_hidden_companies",[]));
   const [editingCompany, setEditingCompany] = useState(null); // company object being edited
@@ -847,6 +982,18 @@ export default function App() {
                     <button key={a} className={`atab ${areaF===a?"active":""}`} onClick={()=>setAreaF(a)}>{a}</button>
                   ))}
                 </div>
+                <button className="nav-btn" onClick={()=>{
+                    const res=generateWeekProposal(schedule,visible,shifts,customRules,wSched);
+                    if(res.proposal) setProposal(res.proposal);
+                    else alert(res.reason);
+                  }} title="Generar semana automáticamente según patrones históricos"
+                  style={{fontSize:11,color:D.text2,display:"flex",alignItems:"center",gap:4}}>
+                  <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+                    <path d="M6.5 1v2M6.5 10v2M1 6.5h2M10 6.5h2M2.6 2.6l1.4 1.4M9 9l1.4 1.4M2.6 10.4L4 9M9 4l1.4-1.4" stroke={D.text2} strokeWidth="1.2" strokeLinecap="round"/>
+                    <circle cx="6.5" cy="6.5" r="1.8" stroke={D.text2} strokeWidth="1.2"/>
+                  </svg>
+                  Auto
+                </button>
                 <button className="nav-btn" onClick={()=>setReportModal(true)} title="Generar reporte"
                   style={{fontSize:11,color:D.text2,display:"flex",alignItems:"center",gap:4}}>
                   <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect x=".5" y=".5" width="12" height="12" rx="2" stroke={D.text2}/><line x1="3" y1="4" x2="10" y2="4" stroke={D.text2} strokeWidth="1.2"/><line x1="3" y1="6.5" x2="10" y2="6.5" stroke={D.text2} strokeWidth="1.2"/><line x1="3" y1="9" x2="7" y2="9" stroke={D.text2} strokeWidth="1.2"/></svg>
@@ -855,12 +1002,40 @@ export default function App() {
               </div>
             </div>
 
+            {proposal && view==="week" && (
+              <div style={{display:"flex",alignItems:"center",gap:10,padding:"8px 16px",background:dark?"#1A2A1A":"#F0FAF4",borderBottom:`1px solid ${dark?"#2A4A2A":"#A8DDB8"}`,flexShrink:0}}>
+                <span style={{fontSize:12,color:dark?"#7ACC8F":"#2D7A4A",fontWeight:500}}>
+                  ✓ Propuesta generada · {Object.keys(proposal).length} turnos sugeridos (punteados)
+                </span>
+                <div style={{marginLeft:"auto",display:"flex",gap:6}}>
+                  <button className="btn" onClick={()=>{
+                      setSchedule(p=>({...p,[wk]:{...(p[wk]||{}),...proposal}}));
+                      setProposal(null);
+                    }}
+                    style={{fontSize:11,padding:"5px 12px",borderRadius:5,background:"#2D7A4A",color:"#fff",fontWeight:500}}>
+                    Aceptar
+                  </button>
+                  <button className="btn" onClick={()=>{
+                      const res=generateWeekProposal(schedule,visible,shifts,customRules,wSched);
+                      if(res.proposal) setProposal(res.proposal); else { alert(res.reason); setProposal(null); }
+                    }}
+                    style={{fontSize:11,padding:"5px 12px",borderRadius:5,background:"none",color:dark?"#7ACC8F":"#2D7A4A",border:`1px solid ${dark?"#2A4A2A":"#A8DDB8"}`}}>
+                    Regenerar
+                  </button>
+                  <button className="btn" onClick={()=>setProposal(null)}
+                    style={{fontSize:11,padding:"5px 12px",borderRadius:5,background:"none",color:D.text2,border:`1px solid ${D.border}`}}>
+                    Descartar
+                  </button>
+                </div>
+              </div>
+            )}
+
             {view==="week"
               ? <WeekGrid users={visible} shifts={shifts} dates={dates} wSched={wSched}
                   dragging={dragging} dragOver={dragOver}
                   setPicker={setPicker} removeW={removeW}
                   userHoursW={userHoursW} areaF={areaF} onUserClick={u=>setProfileUser(u)}
-                  assignW={assignW} startDrag={startDrag} dark={dark} D={D} company={company} />
+                  assignW={assignW} startDrag={startDrag} dark={dark} D={D} company={company} proposal={proposal} />
               : <MonthCal users={visible} shifts={shifts} schedule={schedule} monthRef={monthRef} dark={dark}
                   dragging={dragging} dragOver={dragOver} setDragOver={setDragOver}
                   setPicker={setPicker} dropM={dropM} removeM={removeM} setDragging={setDragging} />
@@ -1149,7 +1324,7 @@ export default function App() {
 }
 
 // ─── WEEK GRID ────────────────────────────────────────────────────────────────
-function WeekGrid({ users, shifts, dates, wSched, dragging, dragOver, setPicker, removeW, userHoursW, areaF, onUserClick, assignW, startDrag, dark, D, company }) {
+function WeekGrid({ users, shifts, dates, wSched, dragging, dragOver, setPicker, removeW, userHoursW, areaF, onUserClick, assignW, startDrag, dark, D, company, proposal }) {
   const today=new Date(); today.setHours(0,0,0,0);
   const showSep=areaF==="Todas";
   const rows=[];
@@ -1284,7 +1459,12 @@ function WeekGrid({ users, shifts, dates, wSched, dragging, dragOver, setPicker,
                     )}
                     {val && <button className="btn rm" onPointerDown={e=>e.stopPropagation()} onClick={e=>{ e.stopPropagation(); removeW(day,u.id); }}
                       style={{position:"absolute",top:2,right:2,background:dark?"rgba(30,30,30,.95)":"rgba(255,255,255,.96)",color:D.text2,fontSize:10,lineHeight:1,padding:"2px 4px",borderRadius:4,border:`1px solid ${D.border}`,opacity:0,zIndex:5}}>×</button>}
-                    {!val && <div className="cell-plus" style={{height:38,display:"flex",alignItems:"center",justifyContent:"center",color:D.text3,fontSize:6,opacity:0,transition:"opacity .1s"}}>{isOver?"↓":"+"}</div>}
+                    {!val && proposal?.[`${day}-${u.id}`] && (
+                      <div style={{opacity:.55,borderRadius:7,outline:`1.5px dashed ${dark?"#5A8C6A":"#7ACC8F"}`,outlineOffset:-1}}>
+                        <CellTag val={proposal[`${day}-${u.id}`]} shifts={shifts} dark={dark}/>
+                      </div>
+                    )}
+                    {!val && !proposal?.[`${day}-${u.id}`] && <div className="cell-plus" style={{height:38,display:"flex",alignItems:"center",justifyContent:"center",color:D.text3,fontSize:6,opacity:0,transition:"opacity .1s"}}>{isOver?"↓":"+"}</div>}
                   </div>
                 </td>;
               })}
