@@ -373,19 +373,34 @@ function mostCommon(freqObj) {
 // For a given area+day+target-date, returns the typical {am:{count,shiftVal}, pm:{count,shiftVal}}
 // preferring samples that match this exact week-position-in-month, falling back to the plain
 // day-of-week average when there isn't enough position-specific history yet.
+function median(arr) {
+  if (!arr.length) return 0;
+  const s = [...arr].sort((a,b)=>a-b);
+  const mid = Math.floor(s.length/2);
+  return s.length % 2 ? s[mid] : Math.round((s[mid-1]+s[mid])/2);
+}
+
+// The "typical" headcount for area+day is always grounded in the MEDIAN across
+// ALL valid historical weeks for that day-of-week (robust to one-off outliers
+// like a single unusually busy or unusually quiet day). Week-position-in-month
+// data (1st/2nd/3rd/last Monday, etc.) only overrides this when there are at
+// least 3 matching historical weeks — a single matching week is not enough
+// evidence to treat as "the rule" for that specific position.
 function typicalNeed(demand, area, day, date) {
   const byDay = demand[area]?.[day];
-  if (!byDay) return { am:{count:0,shiftVal:null}, pm:{count:0,shiftVal:null} };
+  if (!byDay || !byDay.all?.length) return { am:{count:0,shiftVal:null}, pm:{count:0,shiftVal:null} };
+
+  const baseline = byDay.all; // robust: every valid week for this day-of-week, however many there are
+
   const { pos, isLastOccurrence } = weekPositionInMonth(date);
   const posKeys = [`p${pos}`, ...(isLastOccurrence ? ["last"] : [])];
-  let samples = null;
-  for (const pk of posKeys) { if (byDay[pk]?.length) { samples = byDay[pk]; break; } }
-  if (!samples) samples = byDay.all || [];
-  if (!samples.length) return { am:{count:0,shiftVal:null}, pm:{count:0,shiftVal:null} };
+  let samples = baseline;
+  for (const pk of posKeys) {
+    if (byDay[pk]?.length >= 3) { samples = byDay[pk]; break; } // only trust position data with real evidence
+  }
 
-  const avg = (arr) => Math.round(arr.reduce((s,v)=>s+v,0) / arr.length);
-  const amCount = avg(samples.map(s=>s.am));
-  const pmCount = avg(samples.map(s=>s.pm));
+  const amCount = median(samples.map(s=>s.am));
+  const pmCount = median(samples.map(s=>s.pm));
   const amShiftFreq = {}; samples.forEach(s=>Object.entries(s.amShifts).forEach(([v,c])=>amShiftFreq[v]=(amShiftFreq[v]||0)+c));
   const pmShiftFreq = {}; samples.forEach(s=>Object.entries(s.pmShifts).forEach(([v,c])=>pmShiftFreq[v]=(pmShiftFreq[v]||0)+c));
   return { am:{count:amCount, shiftVal:mostCommon(amShiftFreq)}, pm:{count:pmCount, shiftVal:mostCommon(pmShiftFreq)} };
