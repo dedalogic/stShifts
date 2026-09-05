@@ -240,9 +240,11 @@ function analyzeHistory(schedule) {
   const stats = {};       // stats[uid][day][val] = count — plain day-of-week frequency
   const statsByPos = {};  // statsByPos[uid][day][posKey][val] = count — position-in-month aware
   let weekCount = 0;
+  const validWeekKey = /^w\d{4}-\d{2}-\d{2}$/;
   Object.keys(schedule).forEach(wk => {
+    if (!validWeekKey.test(wk)) return;
     const week = schedule[wk];
-    if (!week || Object.keys(week).length === 0) return;
+    if (!week || Object.keys(week).length < 15) return;
     weekCount++;
     const m = wk.match(/^w(\d{4})-(\d{2})-(\d{2})$/);
     const monday = m ? new Date(+m[1], +m[2]-1, +m[3]) : null;
@@ -312,10 +314,12 @@ function analyzeAreaDemand(schedule, uidAreaMap, shifts) {
   const demand = {};
   let weekCount = 0;
   const isPM = val => { if (isSpec(val)) return null; const s = shifts.find(x=>x.id===val); return s ? t2m(s.start)/60 >= 13 : null; };
+  const validWeekKey = /^w\d{4}-\d{2}-\d{2}$/; // legacy keys like "w0", "w1" (pre-date-fix) are excluded
 
   Object.keys(schedule).forEach(wk => {
+    if (!validWeekKey.test(wk)) return; // skip stale/legacy-format weeks entirely
     const week = schedule[wk];
-    if (!week || Object.keys(week).length===0) return;
+    if (!week || Object.keys(week).length < 15) return; // skip near-empty/incomplete weeks (not a real staffed week)
     weekCount++;
     const m = wk.match(/^w(\d{4})-(\d{2})-(\d{2})$/);
     const monday = m ? new Date(+m[1], +m[2]-1, +m[3]) : null;
@@ -478,9 +482,10 @@ function generateWeekProposal(schedule, users, shifts, customRules, currentWeek,
               u,
               sundayOk: day !== "Domingo" || freeSundaysElsewhere(u.id, thisWk) >= 2,
               missing: contractHours(u) - hoursOf[u.id],
+              jitter: Math.random(), // breaks ties differently each time "Regenerar" runs
             }))
-            // fairness: protect Sunday-rest quota first, then give shifts to whoever needs hours most
-            .sort((a,b) => (b.sundayOk - a.sundayOk) || (b.missing - a.missing));
+            // fairness: protect Sunday-rest quota first, then whoever needs hours most; random tie-break
+            .sort((a,b) => (b.sundayOk - a.sundayOk) || (b.missing - a.missing) || (a.jitter - b.jitter));
 
           if (!candidates.length) break; // can't fully cover — will show up as an alert
           const c = candidates[0];
