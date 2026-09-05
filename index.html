@@ -736,6 +736,8 @@ export default function App() {
   const [proposal, setProposal] = useState(null); // {`day-uid`: val} — auto-generated draft
   const [proposalMeta, setProposalMeta] = useState(null); // {templateLabel}
   const [cellClip, setCellClip] = useState(null); // {val, fromLabel} single, or {seq:[{offset,val}], fromLabel} for horizontal ranges
+  const [undoStack, setUndoStack] = useState([]); // past schedule snapshots, capped at 20
+  const [redoStack, setRedoStack] = useState([]);
   const [multiSel, setMultiSel] = useState(null); // {uid, days:[dayNames]} — Ctrl+click horizontal selection
   const [wizardOpen, setWizardOpen] = useState(false);
   const [hiddenCompanies, setHiddenCompanies] = useState(()=>safeGet("so_hidden_companies",[]));
@@ -823,8 +825,39 @@ export default function App() {
     return ()=>window.removeEventListener("keydown",onEsc);
   },[cellClip,multiSel]);
 
-  const setCell=(wk2,dn,uid,val)=>setSchedule(p=>({...p,[wk2]:{...(p[wk2]||{}),[`${dn}-${uid}`]:val}}));
-  const delCell=(wk2,dn,uid)=>setSchedule(p=>{ const w={...(p[wk2]||{})}; delete w[`${dn}-${uid}`]; return{...p,[wk2]:w}; });
+  function pushUndoSnapshot() {
+    setUndoStack(stack => [...stack.slice(-19), schedule]);
+    setRedoStack([]);
+  }
+  function undoSchedule() {
+    setUndoStack(stack => {
+      if (!stack.length) return stack;
+      const prev = stack[stack.length-1];
+      setRedoStack(r => [...r.slice(-19), schedule]);
+      setSchedule(prev);
+      return stack.slice(0,-1);
+    });
+  }
+  function redoSchedule() {
+    setRedoStack(stack => {
+      if (!stack.length) return stack;
+      const next = stack[stack.length-1];
+      setUndoStack(u => [...u.slice(-19), schedule]);
+      setSchedule(next);
+      return stack.slice(0,-1);
+    });
+  }
+  useEffect(()=>{
+    const onKey=e=>{
+      if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="z" && !e.shiftKey){ e.preventDefault(); undoSchedule(); }
+      if((e.ctrlKey||e.metaKey) && (e.key.toLowerCase()==="y" || (e.key.toLowerCase()==="z"&&e.shiftKey))){ e.preventDefault(); redoSchedule(); }
+    };
+    window.addEventListener("keydown",onKey);
+    return ()=>window.removeEventListener("keydown",onKey);
+  },[schedule]);
+
+  const setCell=(wk2,dn,uid,val)=>{ pushUndoSnapshot(); setSchedule(p=>({...p,[wk2]:{...(p[wk2]||{}),[`${dn}-${uid}`]:val}})); };
+  const delCell=(wk2,dn,uid)=>{ pushUndoSnapshot(); setSchedule(p=>{ const w={...(p[wk2]||{})}; delete w[`${dn}-${uid}`]; return{...p,[wk2]:w}; }); };
   const assignW=(day,uid,val)=>setCell(wk,day,uid,val);
 
   function fixCoverageDay(day, period, needValue){
@@ -876,15 +909,14 @@ export default function App() {
   }
 
   function applyTemplate(tpl, targetWo){
-    // Apply to a single week
+    pushUndoSnapshot();
     const wk2=wKey(targetWo);
     setSchedule(p=>({ ...p, [wk2]: { ...(p[wk2]||{}), ...tpl.data } }));
   }
 
   function applyTemplateMonth(tpl, year, month){
-    // Apply to every week of the month
+    pushUndoSnapshot();
     const allDates=monthDates(year,month);
-    // Get unique week offsets in this month
     const weekOffsets=[...new Set(allDates.map(d=>dateToWO(d)))];
     setSchedule(p=>{
       const next={...p};
@@ -920,6 +952,7 @@ export default function App() {
     setShifts(newShifts);
     setSchedule(newSchedule);
     setTemplates(newTemplates);
+    setUndoStack([]); setRedoStack([]);
     setCompanyId(newId);
     setAreaF("Todas");
     setPicker(null);
@@ -1257,6 +1290,15 @@ export default function App() {
                 style={{width:20,height:20,borderRadius:"50%",background:D.bg2,border:`1px solid ${D.border2}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,color:D.text2,flexShrink:0,padding:0}}>
                 {sidebarOpen?"‹":"›"}
               </button>
+              {/* Undo/Redo — subtle, disabled when empty */}
+              <button className="btn" onClick={undoSchedule} disabled={!undoStack.length} title="Deshacer (Ctrl+Z)"
+                style={{width:22,height:22,borderRadius:6,background:"none",border:"none",display:"flex",alignItems:"center",justifyContent:"center",color:undoStack.length?D.text2:D.text3,opacity:undoStack.length?1:.35,cursor:undoStack.length?"pointer":"default",flexShrink:0,padding:0}}>
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 5.5H9a3 3 0 0 1 0 6H6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/><path d="M5.5 3L3 5.5 5.5 8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              </button>
+              <button className="btn" onClick={redoSchedule} disabled={!redoStack.length} title="Rehacer (Ctrl+Shift+Z)"
+                style={{width:22,height:22,borderRadius:6,background:"none",border:"none",display:"flex",alignItems:"center",justifyContent:"center",color:redoStack.length?D.text2:D.text3,opacity:redoStack.length?1:.35,cursor:redoStack.length?"pointer":"default",flexShrink:0,padding:0,marginRight:2}}>
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M11 5.5H5a3 3 0 0 0 0 6H8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/><path d="M8.5 3L11 5.5 8.5 8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              </button>
               <div style={{background:D.bg3,borderRadius:6,padding:3,display:"flex",gap:1}}>
                 <button className={`vtab ${view==="week"?"active":""}`} onClick={()=>setView("week")}>WK</button>
                 <button className={`vtab ${view==="month"?"active":""}`} onClick={()=>setView("month")}>Mes</button>
@@ -1306,6 +1348,7 @@ export default function App() {
                 </span>
                 <div style={{marginLeft:"auto",display:"flex",gap:6}}>
                   <button className="btn" onClick={()=>{
+                      pushUndoSnapshot();
                       setSchedule(p=>({...p,[wk]:{...(p[wk]||{}),...proposal}}));
                       setProposal(null); setProposalMeta(null);
                     }}
@@ -1331,7 +1374,7 @@ export default function App() {
             {cellClip && !multiSel && (
               <div style={{position:"absolute",bottom:16,left:"50%",transform:"translateX(-50%)",zIndex:30,display:"flex",alignItems:"center",gap:8,padding:"6px 8px 6px 12px",borderRadius:20,background:dark?"rgba(30,30,30,.95)":"rgba(255,255,255,.97)",border:`1px solid ${D.border2}`,boxShadow:`0 4px 16px rgba(0,0,0,${dark?.4:.12})`}}>
                 <span style={{fontSize:11,color:D.text2}}>
-                  {cellClip.seq ? `${cellClip.seq.length} turnos copiados${cellClip.fromLabel?` · ${cellClip.fromLabel}`:""}` : `Turno copiado${cellClip.fromLabel?` · ${cellClip.fromLabel}`:""}`}
+                  {cellClip.areaDay ? `${cellClip.entries.length} turnos de ${cellClip.area} copiados · ${cellClip.sourceDay}` : cellClip.seq ? `${cellClip.seq.length} turnos copiados${cellClip.fromLabel?` · ${cellClip.fromLabel}`:""}` : `Turno copiado${cellClip.fromLabel?` · ${cellClip.fromLabel}`:""}`}
                 </span>
                 <button className="btn" onClick={()=>setCellClip(null)}
                   style={{width:22,height:22,borderRadius:"50%",background:D.bg3,color:D.text2,fontSize:13,display:"flex",alignItems:"center",justifyContent:"center",padding:0}}>
@@ -1774,6 +1817,16 @@ function WeekGrid({ users, shifts, dates, wSched, dragging, dragOver, setPicker,
                   data-fillkey="1" data-filluid={u.id} data-fillidx={di}
                   onClick={e=>{
                     if(dragging||filling) return;
+                    if(e.shiftKey){
+                      // Copy the whole area's lineup for this day (e.g. all of Cocina, or all of Caja/Salón)
+                      const areaUsers = users.filter(x=>x.area===u.area);
+                      const entries = areaUsers
+                        .map(x=>({uid:x.id, val:wSched[`${day}-${x.id}`]}))
+                        .filter(e2=>e2.val);
+                      if(!entries.length) return;
+                      setCellClip({areaDay:true, area:u.area, sourceDay:day, entries, fromLabel:`${u.area} · ${day}`});
+                      return;
+                    }
                     if(e.ctrlKey||e.metaKey){
                       if(!val) return; // only select filled cells
                       setMultiSel(prev=>{
@@ -1784,6 +1837,11 @@ function WeekGrid({ users, shifts, dates, wSched, dragging, dragOver, setPicker,
                       return;
                     }
                     if(cellClip){
+                      if(cellClip.areaDay){
+                        cellClip.entries.forEach(({uid,val:sv})=>assignW(day, uid, sv));
+                        setCellClip(null);
+                        return;
+                      }
                       if(cellClip.seq){
                         const baseIdx=DAYS.indexOf(day);
                         cellClip.seq.forEach(({offset,val:sv})=>{
