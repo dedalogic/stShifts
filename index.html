@@ -300,51 +300,117 @@ function contractHours(u) {
 // Finds the best historical week to use as a template: same week-of-month position
 // (1st, 2nd, 3rd... or "last") as the target week, most recent match first.
 // Falls back to the most recent saved week overall if no position match exists.
-function findTemplateWeek(schedule, wo) {
-  const monday = getMonday(wo);
-  const targetKey = wKeyFromDate(monday);
-  const { pos, isLastOccurrence } = weekPositionInMonth(monday);
+// Learns, per AREA (Cocina, Caja, Salón...), how many people are typically
+// needed in AM and PM each day — and which shift-type is typically used —
+// by counting historical assignments. This is identity-agnostic: it doesn't
+// matter WHO worked, only how many people from that area worked AM/PM that
+// day. This makes it robust to staff turnover (people leaving, joining,
+// being renamed) since the shape of demand belongs to the area, not to a
+// specific person.
+function analyzeAreaDemand(schedule, uidAreaMap, shifts) {
+  // demand[area][day][posKey] = { am:[shiftVal counts], pm:[shiftVal counts] }
+  const demand = {};
+  let weekCount = 0;
+  const isPM = val => { if (isSpec(val)) return null; const s = shifts.find(x=>x.id===val); return s ? t2m(s.start)/60 >= 13 : null; };
 
-  const candidates = Object.keys(schedule)
-    .map(wk => {
-      const m = wk.match(/^w(\d{4})-(\d{2})-(\d{2})$/);
-      if (!m) return null;
-      const data = schedule[wk];
-      if (!data || Object.keys(data).length === 0) return null;
-      if (wk === targetKey) return null;
-      return { wk, date: new Date(+m[1], +m[2]-1, +m[3]), data };
-    })
-    .filter(Boolean);
+  Object.keys(schedule).forEach(wk => {
+    const week = schedule[wk];
+    if (!week || Object.keys(week).length===0) return;
+    weekCount++;
+    const m = wk.match(/^w(\d{4})-(\d{2})-(\d{2})$/);
+    const monday = m ? new Date(+m[1], +m[2]-1, +m[3]) : null;
 
-  if (!candidates.length) return null;
+    // First, count real headcount per area/day/period for THIS historical week
+    const weekCounts = {}; // weekCounts[area][day] = {am:0, pm:0, amShifts:{}, pmShifts:{}}
+    Object.entries(week).forEach(([key, val]) => {
+      const di = key.indexOf("-");
+      const day = key.slice(0, di), uid = key.slice(di + 1);
+      const area = uidAreaMap[uid];
+      if (!area) return; // unknown / permanently removed person — can't attribute an area, skip
+      const pm = isPM(val);
+      if (pm === null) return; // special (Libre/Falta/etc) doesn't count toward headcount
+      if (!weekCounts[area]) weekCounts[area] = {};
+      if (!weekCounts[area][day]) weekCounts[area][day] = { am:0, pm:0, amShifts:{}, pmShifts:{} };
+      if (pm) { weekCounts[area][day].pm++; weekCounts[area][day].pmShifts[val]=(weekCounts[area][day].pmShifts[val]||0)+1; }
+      else    { weekCounts[area][day].am++; weekCounts[area][day].amShifts[val]=(weekCounts[area][day].amShifts[val]||0)+1; }
+    });
 
-  const samePos = candidates.filter(c => {
-    const p = weekPositionInMonth(c.date);
-    return p.pos === pos || (isLastOccurrence && p.isLastOccurrence);
-  }).sort((a,b) => b.date - a.date);
-
-  if (samePos.length) return samePos[0];
-  return candidates.sort((a,b) => b.date - a.date)[0];
+    // Then fold this week's counts into the aggregate, tagged by day-of-week
+    // and (if we know the date) by week-position-in-month for finer matching.
+    Object.entries(weekCounts).forEach(([area, byDay]) => {
+      Object.entries(byDay).forEach(([day, c]) => {
+        if (!demand[area]) demand[area] = {};
+        if (!demand[area][day]) demand[area][day] = { all: [] };
+        demand[area][day].all.push(c);
+        if (monday) {
+          const dayIdx = DAYS.indexOf(day);
+          if (dayIdx >= 0) {
+            const date = new Date(monday); date.setDate(monday.getDate()+dayIdx);
+            const { pos, isLastOccurrence } = weekPositionInMonth(date);
+            const posKeys = [`p${pos}`, ...(isLastOccurrence ? ["last"] : [])];
+            posKeys.forEach(pk => {
+              if (!demand[area][day][pk]) demand[area][day][pk] = [];
+              demand[area][day][pk].push(c);
+            });
+          }
+        }
+      });
+    });
+  });
+  return { demand, weekCount };
 }
 
-// Generates a proposal by replicating the most similar historical week (same
-// position within the month), then trimming only what breaks hard constraints
-// (contract hours, incompatibilities, consecutive days, Sunday rest quota).
-// This keeps the coherent shape of a week that actually worked, instead of
-// voting cell-by-cell which produces incoherent, noisy results.
-function generateWeekProposal(schedule, users, shifts, customRules, currentWeek, wo) {
-  const weekCount = Object.values(schedule).filter(w => w && Object.keys(w).length > 0).length;
-  if (weekCount === 0) return { proposal: null, reason: "No hay semanas guardadas para aprender." };
+function mostCommon(freqObj) {
+  const entries = Object.entries(freqObj||{});
+  if (!entries.length) return null;
+  return entries.sort((a,b)=>b[1]-a[1])[0][0];
+}
 
-  const template = findTemplateWeek(schedule, wo);
-  if (!template) return { proposal: null, reason: "No hay una semana anterior en la que basarse." };
+// For a given area+day+target-date, returns the typical {am:{count,shiftVal}, pm:{count,shiftVal}}
+// preferring samples that match this exact week-position-in-month, falling back to the plain
+// day-of-week average when there isn't enough position-specific history yet.
+function typicalNeed(demand, area, day, date) {
+  const byDay = demand[area]?.[day];
+  if (!byDay) return { am:{count:0,shiftVal:null}, pm:{count:0,shiftVal:null} };
+  const { pos, isLastOccurrence } = weekPositionInMonth(date);
+  const posKeys = [`p${pos}`, ...(isLastOccurrence ? ["last"] : [])];
+  let samples = null;
+  for (const pk of posKeys) { if (byDay[pk]?.length) { samples = byDay[pk]; break; } }
+  if (!samples) samples = byDay.all || [];
+  if (!samples.length) return { am:{count:0,shiftVal:null}, pm:{count:0,shiftVal:null} };
+
+  const avg = (arr) => Math.round(arr.reduce((s,v)=>s+v,0) / arr.length);
+  const amCount = avg(samples.map(s=>s.am));
+  const pmCount = avg(samples.map(s=>s.pm));
+  const amShiftFreq = {}; samples.forEach(s=>Object.entries(s.amShifts).forEach(([v,c])=>amShiftFreq[v]=(amShiftFreq[v]||0)+c));
+  const pmShiftFreq = {}; samples.forEach(s=>Object.entries(s.pmShifts).forEach(([v,c])=>pmShiftFreq[v]=(pmShiftFreq[v]||0)+c));
+  return { am:{count:amCount, shiftVal:mostCommon(amShiftFreq)}, pm:{count:pmCount, shiftVal:mostCommon(pmShiftFreq)} };
+}
+
+// Generates a week proposal by:
+//  1. Learning, per AREA, the typical AM/PM headcount and shift-type for each
+//     day (identity-agnostic — robust to staff changing over time).
+//  2. Filling those slots with the CURRENT active staff of that area, choosing
+//     who works based on fairness (who's furthest from their weekly hour
+//     target) while respecting hard rules: contract hour caps, incompatible
+//     pairs, max consecutive days, and the 2-free-Sundays-per-month quota.
+// Never touches a cell that's already manually assigned.
+function generateWeekProposal(schedule, users, shifts, customRules, currentWeek, wo, allUsersEver) {
+  const uidAreaMap = {};
+  (allUsersEver || users).forEach(u => { uidAreaMap[u.id] = u.area; });
+
+  const { demand, weekCount } = analyzeAreaDemand(schedule, uidAreaMap, shifts);
+  if (weekCount === 0) return { proposal: null, reason: "No hay semanas guardadas para aprender." };
+  if (Object.keys(demand).length === 0) return { proposal: null, reason: "El historial no tiene datos suficientes por área." };
 
   const monday = getMonday(wo);
   const monthY = monday.getFullYear(), monthM = monday.getMonth();
   const thisWk = wKeyFromDate(monday);
+  const dates = weekDates(wo);
 
   const proposal = {};
   const getShiftH = val => { if (isSpec(val)) return 0; const s = shifts.find(x => x.id === val); return s ? shiftH(s) : 0; };
+  const isPMShift = val => { if (isSpec(val)) return false; const s = shifts.find(x => x.id === val); return s ? t2m(s.start)/60 >= 13 : false; };
 
   const hoursOf = {};
   users.forEach(u => {
@@ -382,29 +448,57 @@ function generateWeekProposal(schedule, users, shifts, customRules, currentWeek,
     return free;
   }
 
-  // Direct replication: same person, same day, same shift as the template week —
-  // only into cells that are still empty. Never overwrites a manual entry.
-  users.forEach(u => {
+  const areas = [...new Set(users.map(u=>u.area))];
+
+  areas.forEach(area => {
+    const areaUsers = users.filter(u => u.area === area);
     DAYS.forEach((day, di) => {
-      const key = `${day}-${u.id}`;
-      if (currentWeek[key] || proposal[key]) return;
-      const tVal = template.data[key];
-      if (!tVal) return;
-      if (conflictsWith(u.id, day)) return;
-      if (wouldExceedConsecutive(u.id, di)) return;
-      if (day === "Domingo" && freeSundaysElsewhere(u.id, thisWk) < 2) return;
-      const h = getShiftH(tVal);
-      if (hoursOf[u.id] + h > contractHours(u)) return;
-      proposal[key] = tVal;
-      hoursOf[u.id] += h;
+      const need = typicalNeed(demand, area, day, dates[di]);
+
+      ["am","pm"].forEach(period => {
+        const target = need[period].count;
+        if (!target) return;
+        const fallbackShift = shifts.find(x => period==="pm" ? t2m(x.start)/60>=13 : t2m(x.start)/60<13);
+        const shiftVal = need[period].shiftVal || fallbackShift?.id;
+        if (!shiftVal) return;
+
+        const countNow = () => areaUsers.reduce((n,u) => {
+          const v = proposal[`${day}-${u.id}`] || currentWeek[`${day}-${u.id}`];
+          if (!v || isSpec(v)) return n;
+          return (isPMShift(v) === (period==="pm")) ? n+1 : n;
+        }, 0);
+
+        while (countNow() < target) {
+          const candidates = areaUsers
+            .filter(u => !proposal[`${day}-${u.id}`] && !currentWeek[`${day}-${u.id}`])
+            .filter(u => hoursOf[u.id] < contractHours(u))
+            .filter(u => !conflictsWith(u.id, day))
+            .filter(u => !wouldExceedConsecutive(u.id, di))
+            .map(u => ({
+              u,
+              sundayOk: day !== "Domingo" || freeSundaysElsewhere(u.id, thisWk) >= 2,
+              missing: contractHours(u) - hoursOf[u.id],
+            }))
+            // fairness: protect Sunday-rest quota first, then give shifts to whoever needs hours most
+            .sort((a,b) => (b.sundayOk - a.sundayOk) || (b.missing - a.missing));
+
+          if (!candidates.length) break; // can't fully cover — will show up as an alert
+          const c = candidates[0];
+          const h = getShiftH(shiftVal);
+          if (hoursOf[c.u.id] + h > contractHours(c.u)) break;
+          proposal[`${day}-${c.u.id}`] = shiftVal;
+          hoursOf[c.u.id] += h;
+        }
+      });
     });
   });
 
   const count = Object.keys(proposal).length;
   return count > 0
-    ? { proposal, reason: null, weekCount, count, templateLabel: weekLabel(dateToWO(template.date)) }
-    : { proposal: null, reason: "No se pudo generar una propuesta a partir del historial." };
+    ? { proposal, reason: null, weekCount, count }
+    : { proposal: null, reason: "No se pudo cubrir ningún turno sin romper reglas (horas, incompatibilidades, descanso)." };
 }
+
 
 
 // ─── RULE ENGINE ──────────────────────────────────────────────────────────────
@@ -1150,10 +1244,10 @@ export default function App() {
                   ))}
                 </div>
                 <button className="nav-btn" onClick={()=>{
-                    const res=generateWeekProposal(schedule,visible,shifts,customRules,wSched,wo);
-                    if(res.proposal){ setProposal(res.proposal); setProposalMeta({templateLabel:res.templateLabel}); }
+                    const res=generateWeekProposal(schedule,users,shifts,customRules,wSched,wo,[...FIXED_USERS,...extra]);
+                    if(res.proposal){ setProposal(res.proposal); setProposalMeta({count:res.count}); }
                     else { alert(res.reason); setProposalMeta(null); }
-                  }} title="Generar semana automáticamente basándose en la semana histórica más parecida"
+                  }} title="Generar semana automáticamente equilibrando por área según el historial"
                   style={{fontSize:11,color:D.text2,display:"flex",alignItems:"center",gap:4}}>
                   <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
                     <path d="M6.5 1v2M6.5 10v2M1 6.5h2M10 6.5h2M2.6 2.6l1.4 1.4M9 9l1.4 1.4M2.6 10.4L4 9M9 4l1.4-1.4" stroke={D.text2} strokeWidth="1.2" strokeLinecap="round"/>
@@ -1172,7 +1266,7 @@ export default function App() {
             {proposal && view==="week" && (
               <div style={{display:"flex",alignItems:"center",gap:10,padding:"8px 16px",background:dark?"#1A2A1A":"#F0FAF4",borderBottom:`1px solid ${dark?"#2A4A2A":"#A8DDB8"}`,flexShrink:0}}>
                 <span style={{fontSize:12,color:dark?"#7ACC8F":"#2D7A4A",fontWeight:500}}>
-                  ✓ Propuesta generada · {Object.keys(proposal).length} turnos sugeridos (punteados){proposalMeta?.templateLabel?` · basada en la semana ${proposalMeta.templateLabel}`:""}
+                  ✓ Propuesta generada · {Object.keys(proposal).length} turnos sugeridos (punteados), equilibrados por área
                 </span>
                 <div style={{marginLeft:"auto",display:"flex",gap:6}}>
                   <button className="btn" onClick={()=>{
@@ -1183,8 +1277,8 @@ export default function App() {
                     Aceptar
                   </button>
                   <button className="btn" onClick={()=>{
-                      const res=generateWeekProposal(schedule,visible,shifts,customRules,wSched,wo);
-                      if(res.proposal){ setProposal(res.proposal); setProposalMeta({templateLabel:res.templateLabel}); }
+                      const res=generateWeekProposal(schedule,users,shifts,customRules,wSched,wo,[...FIXED_USERS,...extra]);
+                      if(res.proposal){ setProposal(res.proposal); setProposalMeta({count:res.count}); }
                       else { alert(res.reason); setProposal(null); setProposalMeta(null); }
                     }}
                     style={{fontSize:11,padding:"5px 12px",borderRadius:5,background:"none",color:dark?"#7ACC8F":"#2D7A4A",border:`1px solid ${dark?"#2A4A2A":"#A8DDB8"}`}}>
