@@ -414,8 +414,8 @@ function typicalNeed(demand, area, day, date) {
 //     target) while respecting hard rules: contract hour caps, incompatible
 //     pairs, max consecutive days, and the 2-free-Sundays-per-month quota.
 // Never touches a cell that's already manually assigned.
-function generateWeekProposal(schedule, users, shifts, customRules, currentWeek, wo, allUsersEver) {
-  const uidAreaMap = {};
+function generateWeekProposal(schedule, users, shifts, customRules, currentWeek, wo, allUsersEver, areaArchive, company) {
+  const uidAreaMap = { ...(areaArchive||{}) }; // archived (deleted) people first, current roster overrides if id reused
   (allUsersEver || users).forEach(u => { uidAreaMap[u.id] = u.area; });
 
   const { demand, weekCount } = analyzeAreaDemand(schedule, uidAreaMap, shifts);
@@ -469,13 +469,29 @@ function generateWeekProposal(schedule, users, shifts, customRules, currentWeek,
 
   const areas = [...new Set(users.map(u=>u.area))];
 
+  // Hard minimum coverage floors per company — never go below these regardless
+  // of what the learned history says. Custom coverage rules (if any exist for
+  // this company) always take priority over these defaults.
+  function coverageFloor(day, period) {
+    const isWeekend = day==="Viernes" || day==="Sábado" || day==="Domingo";
+    if (company?.id === "sf") {
+      if (period==="am") return 2;
+      return isWeekend ? 3 : 2; // Street Flags: 2/2 Lun-Jue, 3 PM Vie-Dom
+    }
+    if (company?.id === "mf") {
+      return 2; // Mafia: nunca menos de 2 en AM ni PM, todos los días
+    }
+    return 0; // other/custom companies: no hardcoded floor, rely purely on learned history
+  }
+
   areas.forEach(area => {
     const areaUsers = users.filter(u => u.area === area);
     DAYS.forEach((day, di) => {
       const need = typicalNeed(demand, area, day, dates[di]);
 
       ["am","pm"].forEach(period => {
-        const target = need[period].count;
+        const floor = coverageFloor(day, period);
+        const target = Math.max(need[period].count, floor);
         if (!target) return;
         const fallbackShift = shifts.find(x => period==="pm" ? t2m(x.start)/60>=13 : t2m(x.start)/60<13);
         const shiftVal = need[period].shiftVal || fallbackShift?.id;
@@ -1264,7 +1280,7 @@ export default function App() {
                   ))}
                 </div>
                 <button className="nav-btn" onClick={()=>{
-                    const res=generateWeekProposal(schedule,users,shifts,customRules,wSched,wo,[...FIXED_USERS,...extra]);
+                    const res=generateWeekProposal(schedule,users,shifts,customRules,wSched,wo,[...FIXED_USERS,...extra],safeGet(pfx+"area_archive",{}),company);
                     if(res.proposal){ setProposal(res.proposal); setProposalMeta({count:res.count}); }
                     else { alert(res.reason); setProposalMeta(null); }
                   }} title="Generar semana automáticamente equilibrando por área según el historial"
@@ -1297,7 +1313,7 @@ export default function App() {
                     Aceptar
                   </button>
                   <button className="btn" onClick={()=>{
-                      const res=generateWeekProposal(schedule,users,shifts,customRules,wSched,wo,[...FIXED_USERS,...extra]);
+                      const res=generateWeekProposal(schedule,users,shifts,customRules,wSched,wo,[...FIXED_USERS,...extra],safeGet(pfx+"area_archive",{}),company);
                       if(res.proposal){ setProposal(res.proposal); setProposalMeta({count:res.count}); }
                       else { alert(res.reason); setProposal(null); setProposalMeta(null); }
                     }}
@@ -1391,7 +1407,13 @@ export default function App() {
                         <button className="btn" title={`Eliminar ${u.name}`} onClick={()=>{
                           if(window.confirm(`¿Eliminar a ${u.name}? Se borrará del horario permanentemente.`)){
                             if(isFixed) setHidden(p=>[...p,u.id]);
-                            else setExtra(p=>p.filter(x=>x.id!==u.id));
+                            else {
+                              // Archive id->area (no personal data) so past shifts remain attributable for learning
+                              const archive = safeGet(pfx+"area_archive", {});
+                              archive[u.id] = u.area;
+                              safeSet(pfx+"area_archive", archive);
+                              setExtra(p=>p.filter(x=>x.id!==u.id));
+                            }
                           }
                         }} style={{background:"none",border:`1px solid ${D.border}`,color:"#9B2335",padding:"5px 8px",borderRadius:5,display:"flex",alignItems:"center",justifyContent:"center"}}>
                           <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
