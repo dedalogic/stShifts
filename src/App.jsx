@@ -723,6 +723,59 @@ function checkRules(sched, users, shifts, wo, customRules=[]) {
 
 
 // ─── LOGIN ────────────────────────────────────────────────────────────────────
+// ─── CAMBIAR CONTRASEÑA ─────────────────────────────────────────────────────────
+function ChangePasswordModal({ dark, onClose }) {
+  const D = getD(dark);
+  const [pwd, setPwd] = useState("");
+  const [pwd2, setPwd2] = useState("");
+  const [error, setError] = useState("");
+  const [done, setDone] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setError("");
+    if (pwd.length < 6) { setError("La contraseña debe tener al menos 6 caracteres."); return; }
+    if (pwd !== pwd2) { setError("Las contraseñas no coinciden."); return; }
+    setLoading(true);
+    const { error } = await supabase.auth.updateUser({ password: pwd });
+    setLoading(false);
+    if (error) { setError("No se pudo cambiar la contraseña: " + error.message); return; }
+    setDone(true);
+  }
+
+  return (
+    <div className="modal-bg" onClick={onClose}>
+      <div className="modal" onClick={e=>e.stopPropagation()} style={{width:340,background:D.bg2,border:`1px solid ${D.border}`,padding:0}}>
+        <div style={{padding:"14px 18px 12px",borderBottom:`1px solid ${D.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <span style={{fontSize:14,fontWeight:600,color:D.text}}>Cambiar contraseña</span>
+          <button className="btn" onClick={onClose} style={{background:"none",color:D.text2,fontSize:17,padding:"2px 6px",lineHeight:1}}>×</button>
+        </div>
+        <div style={{padding:"20px"}}>
+          {done ? (
+            <div style={{textAlign:"center",padding:"12px 0"}}>
+              <div style={{fontSize:14,color:"#2D7A4A",fontWeight:500,marginBottom:14}}>✓ Contraseña actualizada</div>
+              <button className="btn" onClick={onClose} style={{background:D.tabActive,color:D.tabActiveText,padding:"9px 20px",borderRadius:7,fontSize:13,fontWeight:500}}>Listo</button>
+            </div>
+          ) : (
+            <form onSubmit={handleSubmit}>
+              <span className="lbl">Nueva contraseña</span>
+              <input type="password" value={pwd} onChange={e=>setPwd(e.target.value)} autoFocus placeholder="Mínimo 6 caracteres" style={{marginBottom:10,marginTop:6}}/>
+              <span className="lbl">Repite la contraseña</span>
+              <input type="password" value={pwd2} onChange={e=>setPwd2(e.target.value)} style={{marginTop:6}}/>
+              {error && <div style={{fontSize:12,color:"#C0455A",marginTop:10}}>{error}</div>}
+              <button type="submit" disabled={loading}
+                style={{width:"100%",marginTop:18,padding:"10px",borderRadius:7,border:"none",background:D.tabActive,color:D.tabActiveText,fontSize:13,fontWeight:500,cursor:loading?"default":"pointer",opacity:loading?.6:1}}>
+                {loading?"Guardando...":"Guardar contraseña"}
+              </button>
+            </form>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function LoginScreen({ onLoggedIn }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -822,6 +875,7 @@ function AppInner() {
   const [redoStack, setRedoStack] = useState([]);
   const [multiSel, setMultiSel] = useState(null); // {uid, days:[dayNames]} — Ctrl+click horizontal selection
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [pwdModalOpen, setPwdModalOpen] = useState(false);
   const [hiddenCompanies, setHiddenCompanies] = useState(()=>safeGet("so_hidden_companies",[]));
   const [editingCompany, setEditingCompany] = useState(null); // company object being edited
   const [coHoverTimer, setCoHoverTimer] = useState(null);
@@ -1230,6 +1284,14 @@ function AppInner() {
               <path d="M3.5 4V2.8C3.5 2.08 4.08 1.5 4.8 1.5h1.4c.72 0 1.3.58 1.3 1.3V4" stroke={D.text2} strokeWidth="1.2"/>
             </svg>
             <span>+</span>
+          </button>
+          {/* Cambiar contraseña */}
+          <button className="btn" onClick={()=>setPwdModalOpen(true)} title="Cambiar contraseña"
+            style={{background:"none",border:`1px solid ${D.btnBorder}`,borderRadius:6,padding:"6px 7px",display:"flex",alignItems:"center",justifyContent:"center"}}>
+            <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+              <rect x="3" y="6" width="7" height="5.5" rx="1" stroke={D.text2} strokeWidth="1.2"/>
+              <path d="M4.5 6V4a2 2 0 0 1 4 0v2" stroke={D.text2} strokeWidth="1.2"/>
+            </svg>
           </button>
           {/* Cerrar sesión */}
           <button className="btn" onClick={()=>supabase.auth.signOut()} title="Cerrar sesión"
@@ -1718,6 +1780,8 @@ function AppInner() {
         onApplyWeek={(tpl,wo2)=>applyTemplate(tpl,wo2)}
         onApplyMonth={(tpl,y,m)=>applyTemplateMonth(tpl,y,m)}
         onClose={()=>setTemplateModal(false)} />}
+
+      {pwdModalOpen && <ChangePasswordModal dark={dark} onClose={()=>setPwdModalOpen(false)} />}
 
       {wizardOpen && <WizardModal dark={dark} onClose={()=>setWizardOpen(false)}
         onComplete={(co)=>{
