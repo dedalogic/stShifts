@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { supabase } from "./supabaseClient";
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 const DAYS = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"];
@@ -148,12 +149,30 @@ function getFixedAssignment(weekOffset) {
 }
 
 // Load any custom companies created via wizard
+let currentUserId = null;
+export function setSyncUser(id) { currentUserId = id; }
+
 function safeGet(key, fallback) {
   try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch(e) { return fallback; }
 }
 function safeSet(key, val) {
   try { localStorage.setItem(key, JSON.stringify(val)); } catch(e) {}
+  // Sincroniza con Supabase en segundo plano, sin bloquear la UI
+  if (currentUserId) {
+    supabase.from('app_data').upsert({
+      user_id: currentUserId, key, value: val, updated_at: new Date().toISOString(),
+    }).then(({error}) => { if(error) console.warn('Supabase sync failed for', key, error); });
+  }
 }
+
+// Baja todo lo que haya en la nube al iniciar sesión, y lo mete en localStorage
+// para que la app arranque con los datos más recientes sin importar el dispositivo.
+export async function pullAllFromCloud(uid) {
+  const { data, error } = await supabase.from('app_data').select('key, value').eq('user_id', uid);
+  if (error) { console.warn('Pull from Supabase failed', error); return; }
+  data.forEach(row => { try { localStorage.setItem(row.key, JSON.stringify(row.value)); } catch(e) {} });
+}
+
 (function(){
   try {
     const custom = safeGet("so_custom_companies", []);
@@ -161,18 +180,22 @@ function safeSet(key, val) {
   } catch(_){}
 })();
 const t2m = t => { if(!t) return 0; const [h,m]=t.split(":").map(Number); return h*60+m; };
+const m2t = mins => { const m=((mins%1440)+1440)%1440; const h=Math.floor(m/60), mm=m%60; return `${String(h).padStart(2,"0")}:${String(mm).padStart(2,"0")}`; };
 const shiftH = s => { let a=t2m(s.start),b=t2m(s.end); if(b<=a) b+=1440; return (b-a-RULES.BREAK_MIN)/60; };
 const isSpec = v => v && Object.values(SPECIAL).some(s=>s.id===v);
 const getSpec = v => Object.values(SPECIAL).find(s=>s.id===v);
 // wKey uses the absolute Monday date as key so data never shifts with "today"
-function getMonday(wo) {
-  const n=new Date(), m=new Date(n);
-  m.setDate(n.getDate()-((n.getDay()+6)%7)+wo*7); m.setHours(0,0,0,0); return m;
+function mondayOf(date) {
+  const d=new Date(date); d.setDate(d.getDate()-((d.getDay()+6)%7)); d.setHours(0,0,0,0); return d;
 }
-function wKey(wo) {
-  const m=getMonday(wo);
+function wKeyFromDate(date) {
+  const m=mondayOf(date);
   return `w${m.getFullYear()}-${String(m.getMonth()+1).padStart(2,'0')}-${String(m.getDate()).padStart(2,'0')}`;
 }
+function getMonday(wo) {
+  const n=new Date(); n.setDate(n.getDate()+wo*7); return mondayOf(n);
+}
+function wKey(wo) { return wKeyFromDate(getMonday(wo)); }
 function weekLabel(wo) {
   const m=getMonday(wo), s=new Date(m); s.setDate(m.getDate()+6);
   const f=d=>d.toLocaleDateString("es-CL",{day:"numeric",month:"short"});
@@ -183,9 +206,7 @@ function weekDates(wo) {
   return DAYS.map((_,i)=>{ const d=new Date(m); d.setDate(m.getDate()+i); return d; });
 }
 function dateToWO(date) {
-  const n=new Date(); 
-  const cm=new Date(n); cm.setDate(n.getDate()-((n.getDay()+6)%7)); cm.setHours(0,0,0,0);
-  const tm=new Date(date); tm.setDate(date.getDate()-((date.getDay()+6)%7)); tm.setHours(0,0,0,0);
+  const cm=mondayOf(new Date()), tm=mondayOf(date);
   return Math.round((tm-cm)/(7*24*3600*1000));
 }
 function monthDates(y,mo) {
@@ -193,7 +214,7 @@ function monthDates(y,mo) {
   while(d.getMonth()===mo){ r.push(new Date(d)); d.setDate(d.getDate()+1); } return r;
 }
 function cellByDate(sched,date,uid) {
-  const wo=dateToWO(date), wk=wKey(wo), dn=DAYS[(date.getDay()+6)%7];
+  const wk=wKeyFromDate(date), dn=DAYS[(date.getDay()+6)%7];
   return (sched[wk]||{})[`${dn}-${uid}`];
 }
 
@@ -226,21 +247,69 @@ function loadShifts() { const r=localStorage.getItem("so_shifts"); return r?JSON
 function loadSchedule() { const r=localStorage.getItem("so_schedule"); return r?JSON.parse(r):{}; }
 
 // ─── AUTO GENERATOR ───────────────────────────────────────────────────────────
+function weekPositionInMonth(date) {
+  const day = date.getDate();
+  const pos = Math.ceil(day / 7); // 1..5, "1st Monday", "2nd Monday", etc.
+  const lastDate = new Date(date.getFullYear(), date.getMonth()+1, 0).getDate();
+  const isLastOccurrence = (lastDate - day) < 7; // last occurrence of this weekday in the month
+  return { pos, isLastOccurrence };
+}
+
 function analyzeHistory(schedule) {
-  const stats = {}; let weekCount = 0;
+  const stats = {};       // stats[uid][day][val] = count — plain day-of-week frequency
+  const statsByPos = {};  // statsByPos[uid][day][posKey][val] = count — position-in-month aware
+  let weekCount = 0;
+  const validWeekKey = /^w\d{4}-\d{2}-\d{2}$/;
   Object.keys(schedule).forEach(wk => {
+    if (!validWeekKey.test(wk)) return;
     const week = schedule[wk];
-    if (!week || Object.keys(week).length === 0) return;
+    if (!week || Object.keys(week).length < 15) return;
     weekCount++;
+    const m = wk.match(/^w(\d{4})-(\d{2})-(\d{2})$/);
+    const monday = m ? new Date(+m[1], +m[2]-1, +m[3]) : null;
     Object.entries(week).forEach(([key, val]) => {
       const di = key.indexOf("-");
       const day = key.slice(0, di), uid = key.slice(di + 1);
       if (!stats[uid]) stats[uid] = {};
       if (!stats[uid][day]) stats[uid][day] = {};
       stats[uid][day][val] = (stats[uid][day][val] || 0) + 1;
+
+      if (monday) {
+        const dayIdx = DAYS.indexOf(day);
+        if (dayIdx>=0) {
+          const date = new Date(monday); date.setDate(monday.getDate()+dayIdx);
+          const { pos, isLastOccurrence } = weekPositionInMonth(date);
+          const posKeys = [`p${pos}`, ...(isLastOccurrence ? ["last"] : [])];
+          posKeys.forEach(posKey => {
+            if (!statsByPos[uid]) statsByPos[uid] = {};
+            if (!statsByPos[uid][day]) statsByPos[uid][day] = {};
+            if (!statsByPos[uid][day][posKey]) statsByPos[uid][day][posKey] = {};
+            statsByPos[uid][day][posKey][val] = (statsByPos[uid][day][posKey][val]||0) + 1;
+          });
+        }
+      }
     });
   });
-  return { stats, weekCount };
+  return { stats, statsByPos, weekCount };
+}
+
+// Best historical value for a person on a given calendar date, preferring
+// week-of-month-position matches (1st/2nd/3rd.../last Monday etc.) over plain day-of-week.
+function bestHistoricalValue(stats, statsByPos, uid, day, date, filterFn) {
+  const { pos, isLastOccurrence } = weekPositionInMonth(date);
+  const posKeys = [`p${pos}`, ...(isLastOccurrence ? ["last"] : [])];
+  for (const posKey of posKeys) {
+    const freq = statsByPos[uid]?.[day]?.[posKey];
+    if (freq) {
+      const sorted = Object.entries(freq).filter(([v])=>!filterFn||filterFn(v)).sort((a,b)=>b[1]-a[1]);
+      if (sorted.length && sorted[0][1] >= 2) return { val: sorted[0][0], freq: sorted[0][1], confident: true };
+    }
+  }
+  const freq = stats[uid]?.[day];
+  if (!freq) return null;
+  const sorted = Object.entries(freq).filter(([v])=>!filterFn||filterFn(v)).sort((a,b)=>b[1]-a[1]);
+  if (!sorted.length) return null;
+  return { val: sorted[0][0], freq: sorted[0][1], confident: false };
 }
 
 function contractHours(u) {
@@ -249,115 +318,243 @@ function contractHours(u) {
   return 44;
 }
 
-function generateWeekProposal(schedule, users, shifts, customRules, currentWeek) {
-  const { stats, weekCount } = analyzeHistory(schedule);
+// Finds the best historical week to use as a template: same week-of-month position
+// (1st, 2nd, 3rd... or "last") as the target week, most recent match first.
+// Falls back to the most recent saved week overall if no position match exists.
+// Learns, per AREA (Cocina, Caja, Salón...), how many people are typically
+// needed in AM and PM each day — and which shift-type is typically used —
+// by counting historical assignments. This is identity-agnostic: it doesn't
+// matter WHO worked, only how many people from that area worked AM/PM that
+// day. This makes it robust to staff turnover (people leaving, joining,
+// being renamed) since the shape of demand belongs to the area, not to a
+// specific person.
+function analyzeAreaDemand(schedule, uidAreaMap, shifts) {
+  // demand[area][day][posKey] = { am:[shiftVal counts], pm:[shiftVal counts] }
+  const demand = {};
+  let weekCount = 0;
+  const isPM = val => { if (isSpec(val)) return null; const s = shifts.find(x=>x.id===val); return s ? t2m(s.start)/60 >= 13 : null; };
+  const validWeekKey = /^w\d{4}-\d{2}-\d{2}$/; // legacy keys like "w0", "w1" (pre-date-fix) are excluded
+
+  Object.keys(schedule).forEach(wk => {
+    if (!validWeekKey.test(wk)) return; // skip stale/legacy-format weeks entirely
+    const week = schedule[wk];
+    if (!week || Object.keys(week).length < 15) return; // skip near-empty/incomplete weeks (not a real staffed week)
+    weekCount++;
+    const m = wk.match(/^w(\d{4})-(\d{2})-(\d{2})$/);
+    const monday = m ? new Date(+m[1], +m[2]-1, +m[3]) : null;
+
+    // First, count real headcount per area/day/period for THIS historical week
+    const weekCounts = {}; // weekCounts[area][day] = {am:0, pm:0, amShifts:{}, pmShifts:{}}
+    Object.entries(week).forEach(([key, val]) => {
+      const di = key.indexOf("-");
+      const day = key.slice(0, di), uid = key.slice(di + 1);
+      const area = uidAreaMap[uid];
+      if (!area) return; // unknown / permanently removed person — can't attribute an area, skip
+      const pm = isPM(val);
+      if (pm === null) return; // special (Libre/Falta/etc) doesn't count toward headcount
+      if (!weekCounts[area]) weekCounts[area] = {};
+      if (!weekCounts[area][day]) weekCounts[area][day] = { am:0, pm:0, amShifts:{}, pmShifts:{} };
+      if (pm) { weekCounts[area][day].pm++; weekCounts[area][day].pmShifts[val]=(weekCounts[area][day].pmShifts[val]||0)+1; }
+      else    { weekCounts[area][day].am++; weekCounts[area][day].amShifts[val]=(weekCounts[area][day].amShifts[val]||0)+1; }
+    });
+
+    // Then fold this week's counts into the aggregate, tagged by day-of-week
+    // and (if we know the date) by week-position-in-month for finer matching.
+    Object.entries(weekCounts).forEach(([area, byDay]) => {
+      Object.entries(byDay).forEach(([day, c]) => {
+        if (!demand[area]) demand[area] = {};
+        if (!demand[area][day]) demand[area][day] = { all: [] };
+        demand[area][day].all.push(c);
+        if (monday) {
+          const dayIdx = DAYS.indexOf(day);
+          if (dayIdx >= 0) {
+            const date = new Date(monday); date.setDate(monday.getDate()+dayIdx);
+            const { pos, isLastOccurrence } = weekPositionInMonth(date);
+            const posKeys = [`p${pos}`, ...(isLastOccurrence ? ["last"] : [])];
+            posKeys.forEach(pk => {
+              if (!demand[area][day][pk]) demand[area][day][pk] = [];
+              demand[area][day][pk].push(c);
+            });
+          }
+        }
+      });
+    });
+  });
+  return { demand, weekCount };
+}
+
+function mostCommon(freqObj) {
+  const entries = Object.entries(freqObj||{});
+  if (!entries.length) return null;
+  return entries.sort((a,b)=>b[1]-a[1])[0][0];
+}
+
+// For a given area+day+target-date, returns the typical {am:{count,shiftVal}, pm:{count,shiftVal}}
+// preferring samples that match this exact week-position-in-month, falling back to the plain
+// day-of-week average when there isn't enough position-specific history yet.
+function median(arr) {
+  if (!arr.length) return 0;
+  const s = [...arr].sort((a,b)=>a-b);
+  const mid = Math.floor(s.length/2);
+  return s.length % 2 ? s[mid] : Math.round((s[mid-1]+s[mid])/2);
+}
+
+// The "typical" headcount for area+day is always grounded in the MEDIAN across
+// ALL valid historical weeks for that day-of-week (robust to one-off outliers
+// like a single unusually busy or unusually quiet day). Week-position-in-month
+// data (1st/2nd/3rd/last Monday, etc.) only overrides this when there are at
+// least 3 matching historical weeks — a single matching week is not enough
+// evidence to treat as "the rule" for that specific position.
+function typicalNeed(demand, area, day, date) {
+  const byDay = demand[area]?.[day];
+  if (!byDay || !byDay.all?.length) return { am:{count:0,shiftVal:null}, pm:{count:0,shiftVal:null} };
+
+  const baseline = byDay.all; // robust: every valid week for this day-of-week, however many there are
+
+  const { pos, isLastOccurrence } = weekPositionInMonth(date);
+  const posKeys = [`p${pos}`, ...(isLastOccurrence ? ["last"] : [])];
+  let samples = baseline;
+  for (const pk of posKeys) {
+    if (byDay[pk]?.length >= 3) { samples = byDay[pk]; break; } // only trust position data with real evidence
+  }
+
+  const amCount = median(samples.map(s=>s.am));
+  const pmCount = median(samples.map(s=>s.pm));
+  const amShiftFreq = {}; samples.forEach(s=>Object.entries(s.amShifts).forEach(([v,c])=>amShiftFreq[v]=(amShiftFreq[v]||0)+c));
+  const pmShiftFreq = {}; samples.forEach(s=>Object.entries(s.pmShifts).forEach(([v,c])=>pmShiftFreq[v]=(pmShiftFreq[v]||0)+c));
+  return { am:{count:amCount, shiftVal:mostCommon(amShiftFreq)}, pm:{count:pmCount, shiftVal:mostCommon(pmShiftFreq)} };
+}
+
+// Generates a week proposal by:
+//  1. Learning, per AREA, the typical AM/PM headcount and shift-type for each
+//     day (identity-agnostic — robust to staff changing over time).
+//  2. Filling those slots with the CURRENT active staff of that area, choosing
+//     who works based on fairness (who's furthest from their weekly hour
+//     target) while respecting hard rules: contract hour caps, incompatible
+//     pairs, max consecutive days, and the 2-free-Sundays-per-month quota.
+// Never touches a cell that's already manually assigned.
+function generateWeekProposal(schedule, users, shifts, customRules, currentWeek, wo, allUsersEver, areaArchive, company) {
+  const uidAreaMap = { ...(areaArchive||{}) }; // archived (deleted) people first, current roster overrides if id reused
+  (allUsersEver || users).forEach(u => { uidAreaMap[u.id] = u.area; });
+
+  const { demand, weekCount } = analyzeAreaDemand(schedule, uidAreaMap, shifts);
   if (weekCount === 0) return { proposal: null, reason: "No hay semanas guardadas para aprender." };
+  if (Object.keys(demand).length === 0) return { proposal: null, reason: "El historial no tiene datos suficientes por área." };
 
-  const proposal = {}; const hoursOf = {};
+  const monday = getMonday(wo);
+  const monthY = monday.getFullYear(), monthM = monday.getMonth();
+  const thisWk = wKeyFromDate(monday);
+  const dates = weekDates(wo);
+
+  const proposal = {};
   const getShiftH = val => { if (isSpec(val)) return 0; const s = shifts.find(x => x.id === val); return s ? shiftH(s) : 0; };
+  const isPMShift = val => { if (isSpec(val)) return false; const s = shifts.find(x => x.id === val); return s ? t2m(s.start)/60 >= 13 : false; };
 
-  // 1. Fill from patterns
+  const hoursOf = {};
   users.forEach(u => {
     hoursOf[u.id] = 0;
-    DAYS.forEach(day => {
-      if (currentWeek[`${day}-${u.id}`]) { hoursOf[u.id] += getShiftH(currentWeek[`${day}-${u.id}`]); return; }
-      const freq = stats[u.id]?.[day];
-      if (!freq) return;
-      const sorted = Object.entries(freq).sort((a, b) => b[1] - a[1]);
-      const [topVal, topCount] = sorted[0];
-      if (topCount >= Math.max(2, Math.ceil(weekCount * 0.4))) {
-        proposal[`${day}-${u.id}`] = topVal;
-        hoursOf[u.id] += getShiftH(topVal);
-      }
-    });
+    DAYS.forEach(day => { const v = currentWeek[`${day}-${u.id}`]; if (v) hoursOf[u.id] += getShiftH(v); });
   });
 
-  // 2. Cap contract hours — drop weakest days
-  users.forEach(u => {
-    const cap = contractHours(u);
-    while (hoursOf[u.id] > cap) {
-      const entries = DAYS
-        .map(day => ({ day, key: `${day}-${u.id}`, val: proposal[`${day}-${u.id}`] }))
-        .filter(e => e.val && !isSpec(e.val))
-        .map(e => ({ ...e, freq: stats[u.id]?.[e.day]?.[e.val] || 0 }))
-        .sort((a, b) => a.freq - b.freq);
-      if (!entries.length) break;
-      const drop = entries[0];
-      hoursOf[u.id] -= getShiftH(drop.val);
-      delete proposal[drop.key];
+  const incompatRules = (customRules || []).filter(r => r.type === "incompatible" && r.active !== false);
+  function conflictsWith(uid, day) {
+    return incompatRules.some(r => {
+      const other = r.uid1 === uid ? r.uid2 : r.uid2 === uid ? r.uid1 : null;
+      if (!other) return false;
+      const v = proposal[`${day}-${other}`] || currentWeek[`${day}-${other}`];
+      return v && !isSpec(v);
+    });
+  }
+  const consRule = (customRules || []).find(r => r.type === "consecutive" && r.active !== false);
+  const maxCons = consRule ? consRule.value : 6;
+  function wouldExceedConsecutive(uid, dayIdx) {
+    let run = 1;
+    for (let i = dayIdx - 1; i >= 0 && (proposal[`${DAYS[i]}-${uid}`] || currentWeek[`${DAYS[i]}-${uid}`]); i--) run++;
+    for (let i = dayIdx + 1; i < 7 && (proposal[`${DAYS[i]}-${uid}`] || currentWeek[`${DAYS[i]}-${uid}`]); i++) run++;
+    return run > maxCons;
+  }
+  function freeSundaysElsewhere(uid, skipWk) {
+    const mDates = monthDates(monthY, monthM);
+    let free = 0;
+    mDates.filter(d => d.getDay() === 0).forEach(sun => {
+      const wkk = wKeyFromDate(sun);
+      if (wkk === skipWk) return;
+      const dn = DAYS[(sun.getDay()+6)%7];
+      const c = (schedule[wkk]||{})[`${dn}-${uid}`];
+      if (!c || isSpec(c)) free++;
+    });
+    return free;
+  }
+
+  const areas = [...new Set(users.map(u=>u.area))];
+
+  // Hard minimum coverage floors per company — never go below these regardless
+  // of what the learned history says. Custom coverage rules (if any exist for
+  // this company) always take priority over these defaults.
+  function coverageFloor(day, period) {
+    const isWeekend = day==="Viernes" || day==="Sábado" || day==="Domingo";
+    if (company?.id === "sf") {
+      if (period==="am") return 2;
+      return isWeekend ? 3 : 2; // Street Flags: 2/2 Lun-Jue, 3 PM Vie-Dom
     }
-  });
+    if (company?.id === "mf") {
+      return 2; // Mafia: nunca menos de 2 en AM ni PM, todos los días
+    }
+    return 0; // other/custom companies: no hardcoded floor, rely purely on learned history
+  }
 
-  // 3. Incompatibility repair
-  (customRules || []).filter(r => r.type === "incompatible" && r.active !== false).forEach(r => {
-    DAYS.forEach(day => {
-      const k1 = `${day}-${r.uid1}`, k2 = `${day}-${r.uid2}`;
-      const v1 = proposal[k1] || currentWeek[k1], v2 = proposal[k2] || currentWeek[k2];
-      if (v1 && v2 && !isSpec(v1) && !isSpec(v2)) {
-        if (proposal[k1] && (!proposal[k2] || hoursOf[r.uid1] >= hoursOf[r.uid2])) { hoursOf[r.uid1] -= getShiftH(proposal[k1]); delete proposal[k1]; }
-        else if (proposal[k2]) { hoursOf[r.uid2] -= getShiftH(proposal[k2]); delete proposal[k2]; }
-      }
-    });
-  });
+  areas.forEach(area => {
+    const areaUsers = users.filter(u => u.area === area);
+    DAYS.forEach((day, di) => {
+      const need = typicalNeed(demand, area, day, dates[di]);
 
-  // 4. Coverage boost
-  const covRules = (customRules || []).filter(r => r.type === "coverage" && r.active !== false && r.op === "min");
-  const defaultCov = covRules.length === 0;
-  DAYS.forEach((day, di) => {
-    const needs = defaultCov
-      ? [{ period: "am", value: 2 }, { period: "pm", value: di >= 4 ? 3 : 2 }]
-      : covRules.filter(r => r.day === "all" || r.day === day).map(r => ({ period: r.period, value: r.value }));
+      ["am","pm"].forEach(period => {
+        const floor = coverageFloor(day, period);
+        const target = Math.max(need[period].count, floor);
+        if (!target) return;
+        const fallbackShift = shifts.find(x => period==="pm" ? t2m(x.start)/60>=13 : t2m(x.start)/60<13);
+        const shiftVal = need[period].shiftVal || fallbackShift?.id;
+        if (!shiftVal) return;
 
-    needs.forEach(need => {
-      let count = 0;
-      users.forEach(u => {
-        const v = proposal[`${day}-${u.id}`] || currentWeek[`${day}-${u.id}`];
-        if (!v || isSpec(v)) return;
-        const s = shifts.find(x => x.id === v); if (!s) return;
-        const isPM = t2m(s.start) / 60 >= 13;
-        if (need.period === "am" && !isPM) count++;
-        else if (need.period === "pm" && isPM) count++;
-        else if (need.period === "all") count++;
-      });
-      if (count < need.value) {
-        const candidates = users
-          .filter(u => !proposal[`${day}-${u.id}`] && !currentWeek[`${day}-${u.id}`])
-          .filter(u => hoursOf[u.id] < contractHours(u))
-          .map(u => {
-            const freq = stats[u.id]?.[day] || {};
-            const matching = Object.entries(freq).filter(([val]) => {
-              if (isSpec(val)) return false;
-              const s = shifts.find(x => x.id === val); if (!s) return false;
-              const isPM = t2m(s.start) / 60 >= 13;
-              return need.period === "all" || (need.period === "pm" ? isPM : !isPM);
-            }).sort((a, b) => b[1] - a[1]);
-            return { u, shiftVal: matching[0]?.[0] || null, freq: matching[0]?.[1] || 0, missing: contractHours(u) - hoursOf[u.id] };
-          })
-          .sort((a, b) => b.missing - a.missing || b.freq - a.freq);
+        const countNow = () => areaUsers.reduce((n,u) => {
+          const v = proposal[`${day}-${u.id}`] || currentWeek[`${day}-${u.id}`];
+          if (!v || isSpec(v)) return n;
+          return (isPMShift(v) === (period==="pm")) ? n+1 : n;
+        }, 0);
 
-        for (const c of candidates) {
-          if (count >= need.value) break;
-          let val = c.shiftVal;
-          if (!val) {
-            const s = shifts.find(x => (need.period === "pm" ? t2m(x.start)/60 >= 13 : t2m(x.start)/60 < 13));
-            val = s?.id || null;
-          }
-          if (!val) continue;
-          const h = getShiftH(val);
-          if (hoursOf[c.u.id] + h > contractHours(c.u)) continue;
-          proposal[`${day}-${c.u.id}`] = val;
+        while (countNow() < target) {
+          const candidates = areaUsers
+            .filter(u => !proposal[`${day}-${u.id}`] && !currentWeek[`${day}-${u.id}`])
+            .filter(u => hoursOf[u.id] < contractHours(u))
+            .filter(u => !conflictsWith(u.id, day))
+            .filter(u => !wouldExceedConsecutive(u.id, di))
+            .map(u => ({
+              u,
+              sundayOk: day !== "Domingo" || freeSundaysElsewhere(u.id, thisWk) >= 2,
+              missing: contractHours(u) - hoursOf[u.id],
+              jitter: Math.random(), // breaks ties differently each time "Regenerar" runs
+            }))
+            // fairness: protect Sunday-rest quota first, then whoever needs hours most; random tie-break
+            .sort((a,b) => (b.sundayOk - a.sundayOk) || (b.missing - a.missing) || (a.jitter - b.jitter));
+
+          if (!candidates.length) break; // can't fully cover — will show up as an alert
+          const c = candidates[0];
+          const h = getShiftH(shiftVal);
+          if (hoursOf[c.u.id] + h > contractHours(c.u)) break;
+          proposal[`${day}-${c.u.id}`] = shiftVal;
           hoursOf[c.u.id] += h;
-          count++;
         }
-      }
+      });
     });
   });
 
   const count = Object.keys(proposal).length;
   return count > 0
     ? { proposal, reason: null, weekCount, count }
-    : { proposal: null, reason: "No se encontraron patrones suficientes en el historial." };
+    : { proposal: null, reason: "No se pudo cubrir ningún turno sin romper reglas (horas, incompatibilidades, descanso)." };
 }
+
+
 
 // ─── RULE ENGINE ──────────────────────────────────────────────────────────────
 // Rule types:
@@ -367,57 +564,67 @@ function generateWeekProposal(schedule, users, shifts, customRules, currentWeek)
 //   hours      : {type:"hours", uid:"all"|id, op:"min"|"max", value:N, severity, active}
 //   consecutive: {type:"consecutive", value:N, severity, active}
 
-function checkRules(sched, users, shifts, wk, customRules=[]) {
+function checkRules(sched, users, shifts, wo, customRules=[]) {
   const alerts = [];
+  const wk = wKey(wo);
   const week = sched[wk] || {};
+  const prevWeek = sched[wKey(wo-1)] || {};
 
-  // Helper: get shift for user on day
+  // Helper: get shift for user on day (current week)
   function getShift(uid, day) {
     const c = week[`${day}-${uid}`];
     if (!c || isSpec(c)) return null;
     return shifts.find(x => x.id === c) || null;
   }
+  function hasRealShift(sched2, day, uid){
+    const c = sched2[`${day}-${uid}`];
+    return c && !isSpec(c);
+  }
 
-  // ── Built-in rules (always active unless overridden) ──
-  // Max consecutive days
+  // ── Consecutive days — looks back into the previous week too ──
   const consRule = customRules.find(r=>r.type==="consecutive"&&r.active!==false);
   const maxCons = consRule ? consRule.value : 6;
+
   users.forEach(u => {
     let tH = 0, wDs = [];
     DAYS.forEach((day, di) => {
       const s = getShift(u.id, day);
       if (!s) return;
       const h = shiftH(s); tH += h; wDs.push(di);
-      if (h > 10) alerts.push({type:"error", msg:`${u.name}: excede 10h el ${day}`});
+      if (h > 10) alerts.push({type:"error", msg:`${u.name}: excede 10h el ${day}`, fix:`Acorta el turno o divídelo entre dos personas.`});
     });
-    // Hours rule — check custom first
+    // Hours rule
     const hRule = customRules.find(r=>r.type==="hours"&&r.active!==false&&(r.uid==="all"||r.uid===u.id));
     const weekH = hRule ? hRule.value : 44;
     const hOp   = hRule ? hRule.op : "max";
     const hSev  = hRule ? hRule.severity : "warn";
-    if (hOp==="max" && tH > weekH) alerts.push({type:"error", msg:`${u.name}: ${tH.toFixed(1)}h — excede ${weekH}h`});
-    else if (hOp==="min" && tH > 0 && tH < weekH - 1) alerts.push({type:hSev, msg:`${u.name}: ${tH.toFixed(1)}h de ${weekH}h`});
-    else if (!hRule && tH > 0 && tH < 42) alerts.push({type:"warn", msg:`${u.name}: ${tH.toFixed(1)}h de 44h`});
-    // Consecutive
-    if (wDs.length > 1) {
-      let st = 1;
-      for (let i = 1; i < wDs.length; i++) {
-        if (wDs[i] === wDs[i-1]+1) { st++; if (st > maxCons) { alerts.push({type:consRule?.severity||"error", msg:`${u.name}: +${maxCons} días seguidos`}); break; } }
-        else st = 1;
-      }
+    if (hOp==="max" && tH > weekH) alerts.push({type:"error", msg:`${u.name}: ${tH.toFixed(1)}h, excede ${weekH}h`, fix:`Quita el turno menos necesario o márcalo Libre.`});
+    else if (hOp==="min" && tH > 0 && tH < weekH - 1) alerts.push({type:hSev, msg:`${u.name}: ${tH.toFixed(1)}h de ${weekH}h`, fix:`Faltan ${(weekH-tH).toFixed(1)}h, agrega un turno más.`});
+    else if (!hRule && tH > 0 && tH < 42) alerts.push({type:"warn", msg:`${u.name}: ${tH.toFixed(1)}h de 44h`, fix:`Faltan ${(44-tH).toFixed(1)}h, agrega un turno más.`});
+
+    // Consecutive days, counting the tail of the previous week
+    let tail = 0;
+    for (let i = 6; i >= 0; i--) { if (hasRealShift(prevWeek, DAYS[i], u.id)) tail++; else break; }
+    let run = tail, maxRun = tail;
+    DAYS.forEach(day => {
+      if (hasRealShift(week, day, u.id)) { run++; maxRun = Math.max(maxRun, run); }
+      else run = 0;
+    });
+    if (maxRun > maxCons) {
+      const fromPrev = tail > 0 ? ` (viene arrastrando ${tail} desde la semana anterior)` : "";
+      alerts.push({type:consRule?.severity||"error", msg:`${u.name}: ${maxRun} días seguidos trabajando${fromPrev}`, fix:`Marca un día Libre para cortar la racha.`});
     }
   });
 
   // ── Coverage rules ──
   const covRules = customRules.filter(r => r.type==="coverage" && r.active!==false);
-  // Built-in coverage if no custom ones
   if (covRules.length === 0) {
     DAYS.forEach((day, di) => {
       let am = 0, pm = 0;
       users.forEach(u => { const s = getShift(u.id, day); if (!s) return; t2m(s.start)/60 < 13 ? am++ : pm++; });
       const rPM = di >= 4 ? 3 : 2;
-      if (am < 2) alerts.push({type:"warn", msg:`${day}: AM incompleto (${am}/2)`});
-      if (pm < rPM) alerts.push({type:"warn", msg:`${day}: PM incompleto (${pm}/${rPM})`});
+      if (am < 2) alerts.push({type:"warn", msg:`${day}: AM incompleto (${am}/2)`, fix:`Falta 1 persona en AM.`, fixDay:day, fixPeriod:"am", fixValue:2});
+      if (pm < rPM) alerts.push({type:"warn", msg:`${day}: PM incompleto (${pm}/${rPM})`, fix:`Falta 1 persona en PM.`, fixDay:day, fixPeriod:"pm", fixValue:rPM});
     });
   } else {
     covRules.forEach(r => {
@@ -434,10 +641,35 @@ function checkRules(sched, users, shifts, wk, customRules=[]) {
           else if (r.period==="all") count++;
         });
         const fail = r.op==="min" ? count < r.value : count > r.value;
-        if (fail) alerts.push({type:r.severity||"warn", msg:`${day}: ${r.period==="am"?"AM":r.period==="pm"?"PM":"turno"} — ${r.op==="min"?"mínimo":"máximo"} ${r.value} (hay ${count})`});
+        if (fail) alerts.push({type:r.severity||"warn", msg:`${day}: ${r.period==="am"?"AM":r.period==="pm"?"PM":"turno"} ${r.op==="min"?"mínimo":"máximo"} ${r.value} (hay ${count})`,
+          fix: r.op==="min" ? `Faltan ${r.value-count} persona(s).` : `Sobran ${count-r.value} persona(s), quita alguna.`,
+          fixDay: r.op==="min" ? day : null, fixPeriod: r.op==="min" ? r.period : null, fixValue: r.op==="min" ? r.value : null});
       });
     });
   }
+
+  // ── Coverage timeline gaps — real dead hours with nobody working ──
+  DAYS.forEach(day => {
+    const intervals = [];
+    users.forEach(u => {
+      const s = getShift(u.id, day);
+      if (!s) return;
+      let st = t2m(s.start), en = t2m(s.end);
+      if (en <= st) en += 1440;
+      en = Math.min(en, 1440);
+      intervals.push([st, en]);
+    });
+    if (intervals.length < 2) return;
+    intervals.sort((a,b)=>a[0]-b[0]);
+    let curEnd = intervals[0][1];
+    for (let i=1;i<intervals.length;i++){
+      const [st,en] = intervals[i];
+      if (st > curEnd && (st-curEnd) >= 30) {
+        alerts.push({type:"warn", msg:`${day}: nadie trabaja entre ${m2t(curEnd)} y ${m2t(st)}`, fix:`Ajusta la entrada de alguien para cubrir ese hueco.`});
+      }
+      curEnd = Math.max(curEnd, en);
+    }
+  });
 
   // ── Incompatible pairs ──
   customRules.filter(r=>r.type==="incompatible"&&r.active!==false).forEach(r=>{
@@ -446,7 +678,7 @@ function checkRules(sched, users, shifts, wk, customRules=[]) {
     if (!u1||!u2) return;
     DAYS.forEach(day=>{
       const s1=getShift(u1.id,day), s2=getShift(u2.id,day);
-      if (s1&&s2) alerts.push({type:r.severity||"warn", msg:`${u1.name} y ${u2.name} no pueden coincidir el ${day}`});
+      if (s1&&s2) alerts.push({type:r.severity||"warn", msg:`${u1.name} y ${u2.name} no pueden coincidir el ${day}`, fix:`Mueve el turno de uno de los dos a otro día.`});
     });
   });
 
@@ -460,17 +692,101 @@ function checkRules(sched, users, shifts, wk, customRules=[]) {
       if(!s1||!s2) return;
       const s1end=t2m(s1.end)<t2m(s1.start)?t2m(s1.end)+1440:t2m(s1.end);
       const s2start=t2m(s2.start);
-      // Overlap: s2 starts strictly before s1 ends
-      if(s2start < s1end) alerts.push({type:r.severity||"warn", msg:`${u1.name} y ${u2.name} se solapan el ${day}`});
+      if(s2start < s1end) alerts.push({type:r.severity||"warn", msg:`${u1.name} y ${u2.name} se solapan el ${day}`, fix:`Ajusta la hora de entrada o salida.`});
     });
   });
+
+  // ── Monthly rest: at least 2 free Sundays per month ──
+  {
+    const monday = getMonday(wo);
+    const monthY = monday.getFullYear(), monthM = monday.getMonth();
+    const mDates = monthDates(monthY, monthM);
+    const sundays = mDates.filter(d => d.getDay() === 0);
+    if (sundays.length > 0) {
+      users.forEach(u => {
+        let freeSundays = 0;
+        sundays.forEach(sun => {
+          const wkk = wKeyFromDate(sun);
+          const dn = DAYS[(sun.getDay()+6)%7];
+          const wsched = sched[wkk] || {};
+          if (!hasRealShift(wsched, dn, u.id)) freeSundays++;
+        });
+        if (freeSundays < 2) {
+          alerts.push({type:"warn", msg:`${u.name}: solo ${freeSundays} domingo(s) libre(s) en ${MONTH_NAMES[monthM]}`, fix:`Debe tener al menos 2 domingos libres al mes.`});
+        }
+      });
+    }
+  }
 
   return alerts;
 }
 
 
-// ─── MAIN APP ─────────────────────────────────────────────────────────────────
+// ─── LOGIN ────────────────────────────────────────────────────────────────────
+function LoginScreen({ onLoggedIn }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function handleLogin(e) {
+    e.preventDefault();
+    setError(""); setLoading(true);
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    setLoading(false);
+    if (error) { setError("Correo o contraseña incorrectos."); return; }
+    onLoggedIn(data.user.id);
+  }
+
+  return (
+    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#141414",fontFamily:"'Inter',sans-serif"}}>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');`}</style>
+      <form onSubmit={handleLogin} style={{width:320,padding:32,background:"#1C1C1C",borderRadius:14,border:"1px solid #2E2E2E"}}>
+        <div style={{fontSize:18,fontWeight:700,color:"#EDEDEB",marginBottom:4}}>stShifts</div>
+        <div style={{fontSize:13,color:"#888",marginBottom:24}}>Inicia sesión para continuar</div>
+        <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="Correo" autoFocus
+          style={{width:"100%",padding:"10px 12px",borderRadius:8,border:"1px solid #333",background:"#1C1C1C",color:"#EDEDEB",fontSize:14,marginBottom:10,outline:"none"}}/>
+        <input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="Contraseña"
+          style={{width:"100%",padding:"10px 12px",borderRadius:8,border:"1px solid #333",background:"#1C1C1C",color:"#EDEDEB",fontSize:14,marginBottom:16,outline:"none"}}/>
+        {error && <div style={{fontSize:12,color:"#E06565",marginBottom:14}}>{error}</div>}
+        <button type="submit" disabled={loading}
+          style={{width:"100%",padding:"11px",borderRadius:8,border:"none",background:"#EDEDEB",color:"#111",fontSize:14,fontWeight:600,cursor:loading?"default":"pointer",opacity:loading?.6:1}}>
+          {loading?"Entrando...":"Entrar"}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+// ─── AUTH GATE ────────────────────────────────────────────────────────────────
 export default function App() {
+  const [session, setSession] = useState(undefined); // undefined = cargando, null = sin sesión, object = con sesión
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(async ({ data }) => {
+      if (data.session) {
+        setSyncUser(data.session.user.id);
+        await pullAllFromCloud(data.session.user.id);
+      }
+      setSession(data.session || null);
+      setReady(true);
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, sess) => {
+      setSession(sess);
+      if (sess) setSyncUser(sess.user.id);
+    });
+    return () => listener.subscription.unsubscribe();
+  }, []);
+
+  if (!ready) return <div style={{minHeight:"100vh",background:"#141414"}}/>;
+  if (!session) return <LoginScreen onLoggedIn={async (uid)=>{ setSyncUser(uid); await pullAllFromCloud(uid); }}/>;
+
+  return <AppInner />;
+}
+
+// ─── MAIN APP ─────────────────────────────────────────────────────────────────
+function AppInner() {
   const [companyId, setCompanyId] = useState(()=>localStorage.getItem("so_company")||"sf");
   const company = COMPANIES[companyId] || COMPANIES["sf"];
   const pfx = company.prefix;
@@ -500,6 +816,11 @@ export default function App() {
   const [reportModal, setReportModal] = useState(false);
   const [templateModal, setTemplateModal] = useState(false);
   const [proposal, setProposal] = useState(null); // {`day-uid`: val} — auto-generated draft
+  const [proposalMeta, setProposalMeta] = useState(null); // {templateLabel}
+  const [cellClip, setCellClip] = useState(null); // {val, fromLabel} single, or {seq:[{offset,val}], fromLabel} for horizontal ranges
+  const [undoStack, setUndoStack] = useState([]); // past schedule snapshots, capped at 20
+  const [redoStack, setRedoStack] = useState([]);
+  const [multiSel, setMultiSel] = useState(null); // {uid, days:[dayNames]} — Ctrl+click horizontal selection
   const [wizardOpen, setWizardOpen] = useState(false);
   const [hiddenCompanies, setHiddenCompanies] = useState(()=>safeGet("so_hidden_companies",[]));
   const [editingCompany, setEditingCompany] = useState(null); // company object being edited
@@ -507,6 +828,16 @@ export default function App() {
   const [showCoPlus, setShowCoPlus] = useState(false);
   const [templates, setTemplates] = useState(()=>safeGet(pfx+"templates", []));
   const [dark,     setDark]     = useState(()=>localStorage.getItem("so_dark")==="1");
+  const [themeOverlay, setThemeOverlay] = useState(null); // {bg, opacity}
+
+  function toggleDark(){
+    const nextBg = getD(!dark).bg;
+    setThemeOverlay({bg:nextBg, opacity:0});
+    requestAnimationFrame(()=>requestAnimationFrame(()=>setThemeOverlay(o=>o&&({...o,opacity:1}))));
+    setTimeout(()=>setDark(d=>!d), 190);
+    setTimeout(()=>setThemeOverlay(o=>o&&({...o,opacity:0})), 230);
+    setTimeout(()=>setThemeOverlay(null), 520);
+  }
   const [monthRef, setMonthRef] = useState(()=>{ const n=new Date(); return{y:n.getFullYear(),m:n.getMonth()}; });
 
   const setCell_ref=useRef(null);
@@ -568,14 +899,80 @@ export default function App() {
   useEffect(()=>{ safeSet(pfx+"templates",templates); },[templates,pfx]);
   useEffect(()=>{ safeSet(pfx+"schedule", schedule); },[schedule,pfx]);
   useEffect(()=>{ localStorage.setItem(pfx+"dark", dark?"1":"0"); },[dark]);
-  useEffect(()=>{ setAlerts(checkRules(schedule,visible,shifts,wk,customRules)); },[schedule,extra,areaF,shifts,wk,customRules]);
+  useEffect(()=>{ setAlerts(checkRules(schedule,visible,shifts,wo,customRules)); },[schedule,extra,areaF,shifts,wo,customRules]);
+  useEffect(()=>{
+    if(!cellClip && !multiSel) return;
+    const onEsc=e=>{ if(e.key==="Escape"){ setCellClip(null); setMultiSel(null); } };
+    window.addEventListener("keydown",onEsc);
+    return ()=>window.removeEventListener("keydown",onEsc);
+  },[cellClip,multiSel]);
 
-  const setCell=(wk2,dn,uid,val)=>setSchedule(p=>({...p,[wk2]:{...(p[wk2]||{}),[`${dn}-${uid}`]:val}}));
-  const delCell=(wk2,dn,uid)=>setSchedule(p=>{ const w={...(p[wk2]||{})}; delete w[`${dn}-${uid}`]; return{...p,[wk2]:w}; });
+  function pushUndoSnapshot() {
+    setUndoStack(stack => [...stack.slice(-19), schedule]);
+    setRedoStack([]);
+  }
+  function undoSchedule() {
+    setUndoStack(stack => {
+      if (!stack.length) return stack;
+      const prev = stack[stack.length-1];
+      setRedoStack(r => [...r.slice(-19), schedule]);
+      setSchedule(prev);
+      return stack.slice(0,-1);
+    });
+  }
+  function redoSchedule() {
+    setRedoStack(stack => {
+      if (!stack.length) return stack;
+      const next = stack[stack.length-1];
+      setUndoStack(u => [...u.slice(-19), schedule]);
+      setSchedule(next);
+      return stack.slice(0,-1);
+    });
+  }
+  useEffect(()=>{
+    const onKey=e=>{
+      if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="z" && !e.shiftKey){ e.preventDefault(); undoSchedule(); }
+      if((e.ctrlKey||e.metaKey) && (e.key.toLowerCase()==="y" || (e.key.toLowerCase()==="z"&&e.shiftKey))){ e.preventDefault(); redoSchedule(); }
+    };
+    window.addEventListener("keydown",onKey);
+    return ()=>window.removeEventListener("keydown",onKey);
+  },[schedule]);
+
+  const setCell=(wk2,dn,uid,val)=>{ pushUndoSnapshot(); setSchedule(p=>({...p,[wk2]:{...(p[wk2]||{}),[`${dn}-${uid}`]:val}})); };
+  const delCell=(wk2,dn,uid)=>{ pushUndoSnapshot(); setSchedule(p=>{ const w={...(p[wk2]||{})}; delete w[`${dn}-${uid}`]; return{...p,[wk2]:w}; }); };
   const assignW=(day,uid,val)=>setCell(wk,day,uid,val);
+
+  function fixCoverageDay(day, period, needValue){
+    const { stats } = analyzeHistory(schedule);
+    const getShiftH = v => { if(isSpec(v)) return 0; const s=shifts.find(x=>x.id===v); return s?shiftH(s):0; };
+    const isPM = v => { if(isSpec(v)) return false; const s=shifts.find(x=>x.id===v); return s?t2m(s.start)/60>=13:false; };
+    const currentDayHours = {};
+    visible.forEach(u=>{ let h=0; DAYS.forEach(d=>{ const v=wSched[`${d}-${u.id}`]; if(v) h+=getShiftH(v); }); currentDayHours[u.id]=h; });
+    const candidates = visible
+      .filter(u=>!wSched[`${day}-${u.id}`])
+      .filter(u=>currentDayHours[u.id] < contractHours(u))
+      .map(u=>{
+        const freq = stats[u.id]?.[day] || {};
+        const matching = Object.entries(freq).filter(([v])=>{
+          if(isSpec(v)) return false;
+          const pm = isPM(v);
+          return period==="all" || (period==="pm"?pm:!pm);
+        }).sort((a,b)=>b[1]-a[1]);
+        return { u, shiftVal: matching[0]?.[0]||null, freq: matching[0]?.[1]||0, missing: contractHours(u)-currentDayHours[u.id] };
+      })
+      .sort((a,b)=>b.freq-a.freq || b.missing-a.missing);
+
+    if(!candidates.length){ alert("No hay nadie disponible para cubrir ese turno sin exceder sus horas."); return; }
+    const c = candidates[0];
+    let val = c.shiftVal;
+    if(!val){ const s = shifts.find(x=>period==="pm"?t2m(x.start)/60>=13:t2m(x.start)/60<13); val = s?.id||null; }
+    if(!val){ alert("No hay un turno adecuado configurado para ese período."); return; }
+    assignW(day, c.u.id, val);
+  }
+
   const removeW=(day,uid)=>delCell(wk,day,uid);
-  const assignM=(date,uid,val)=>setCell(wKey(dateToWO(date)),DAYS[(date.getDay()+6)%7],uid,val);
-  const removeM=(date,uid)=>delCell(wKey(dateToWO(date)),DAYS[(date.getDay()+6)%7],uid);
+  const assignM=(date,uid,val)=>setCell(wKeyFromDate(date),DAYS[(date.getDay()+6)%7],uid,val);
+  const removeM=(date,uid)=>delCell(wKeyFromDate(date),DAYS[(date.getDay()+6)%7],uid);
 
   const userHoursW=uid=>{ let t=0; DAYS.forEach(d=>{ const c=wSched[`${d}-${uid}`]; if(!c||isSpec(c)) return; const s=shifts.find(x=>x.id===c); if(s) t+=shiftH(s); }); return t; };
 
@@ -594,15 +991,14 @@ export default function App() {
   }
 
   function applyTemplate(tpl, targetWo){
-    // Apply to a single week
+    pushUndoSnapshot();
     const wk2=wKey(targetWo);
     setSchedule(p=>({ ...p, [wk2]: { ...(p[wk2]||{}), ...tpl.data } }));
   }
 
   function applyTemplateMonth(tpl, year, month){
-    // Apply to every week of the month
+    pushUndoSnapshot();
     const allDates=monthDates(year,month);
-    // Get unique week offsets in this month
     const weekOffsets=[...new Set(allDates.map(d=>dateToWO(d)))];
     setSchedule(p=>{
       const next={...p};
@@ -638,6 +1034,7 @@ export default function App() {
     setShifts(newShifts);
     setSchedule(newSchedule);
     setTemplates(newTemplates);
+    setUndoStack([]); setRedoStack([]);
     setCompanyId(newId);
     setAreaF("Todas");
     setPicker(null);
@@ -738,12 +1135,13 @@ export default function App() {
 
   return (
     <div style={{fontFamily:"'Inter',sans-serif",background:D.bg,minHeight:"100vh",color:D.text,colorScheme:dark?"dark":"light"}}>
+      {themeOverlay && <div style={{position:"fixed",inset:0,zIndex:9999,background:themeOverlay.bg,opacity:themeOverlay.opacity,transition:"opacity .22s ease",pointerEvents:"none"}}/>}
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Barlow+Condensed:wght@500;600;700&display=swap');
         *{box-sizing:border-box;margin:0;padding:0;}
         body,#root{user-select:none;-webkit-user-select:none;}
         input,select,textarea{user-select:text!important;-webkit-user-select:text!important;}
-        .no-select,button,.sb-row,.cell-plus,.fill-handle{user-select:none;-webkit-user-select:none;-webkit-user-drag:none;}        ::-webkit-scrollbar{width:4px;height:4px;}
+                .no-select,button,.sb-row,.cell-plus,.fill-handle{user-select:none;-webkit-user-select:none;-webkit-user-drag:none;}        ::-webkit-scrollbar{width:4px;height:4px;}
         ::-webkit-scrollbar-thumb{background:${D.scrollThumb};border-radius:4px;}
         ::-webkit-scrollbar-track{background:transparent;}
         .btn{cursor:pointer;border:none;font-family:'Inter',sans-serif;transition:all .18s cubic-bezier(.4,0,.2,1);}
@@ -769,6 +1167,7 @@ export default function App() {
         .nav-btn:hover{background:${D.bg3};border-color:${D.border2};}
         .nav-btn:active{transform:scale(.97);}
         .wcell{transition:background .12s;cursor:pointer;position:relative;}
+        .wcell.paste-target:hover{background:${dark?"#1A2333":"#EEF3FF"}!important;}
         .wcell *{user-select:none;-webkit-user-select:none;-webkit-user-drag:none;}
         .wcell:hover{background:${D.cellHover}!important;}
         .drag-ov{background:${dark?"#222":"#F8F8F8"}!important;}
@@ -832,8 +1231,16 @@ export default function App() {
             </svg>
             <span>+</span>
           </button>
+          {/* Cerrar sesión */}
+          <button className="btn" onClick={()=>supabase.auth.signOut()} title="Cerrar sesión"
+            style={{background:"none",border:`1px solid ${D.btnBorder}`,borderRadius:6,padding:"6px 7px",display:"flex",alignItems:"center",justifyContent:"center"}}>
+            <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+              <path d="M5 1.5H2.5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1H5" stroke={D.text2} strokeWidth="1.2" strokeLinecap="round"/>
+              <path d="M8.5 9L11.5 6.5 8.5 4M11.5 6.5H4.5" stroke={D.text2} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </button>
           {/* Dark mode toggle */}
-          <button className="btn" onClick={()=>setDark(d=>!d)} title={dark?"Modo claro":"Modo oscuro"}
+          <button className="btn" onClick={toggleDark} title={dark?"Modo claro":"Modo oscuro"}
             style={{background:"none",border:`1px solid ${D.btnBorder}`,borderRadius:6,padding:"6px 7px",display:"flex",alignItems:"center",justifyContent:"center"}}>
             {dark
               ? <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
@@ -942,9 +1349,22 @@ export default function App() {
                 </div>
               </div>
               {alertsEnabled && !collapsed.alertas && alerts.slice(0,8).map((a,i)=>(
-                <div key={i} className="sb-row" style={{cursor:"default",alignItems:"flex-start"}}>
-                  <div style={{width:5,height:5,borderRadius:"50%",background:a.type==="error"?"#9B2335":"#C8A000",flexShrink:0,marginTop:3}}/>
-                  <div style={{fontSize:11,fontWeight:400,color:D.text,lineHeight:1.4}}>{a.msg}</div>
+                <div key={i} className="sb-row" style={{cursor:"default",alignItems:"flex-start",flexDirection:"column",gap:2}}>
+                  <div style={{display:"flex",alignItems:"flex-start",gap:8,width:"100%"}}>
+                    <div style={{width:5,height:5,borderRadius:"50%",background:a.type==="error"?"#9B2335":"#C8A000",flexShrink:0,marginTop:5}}/>
+                    <div style={{fontSize:11,fontWeight:400,color:D.text,lineHeight:1.4,flex:1}}>{a.msg}</div>
+                  </div>
+                  {a.fix && (
+                    <div style={{display:"flex",alignItems:"center",gap:6,paddingLeft:13,width:"100%"}}>
+                      <div style={{fontSize:10,color:D.text3,lineHeight:1.4,flex:1}}>{a.fix}</div>
+                      {a.fixDay && (
+                        <button className="btn" onClick={()=>fixCoverageDay(a.fixDay,a.fixPeriod,a.fixValue)}
+                          style={{fontSize:9,padding:"2px 7px",borderRadius:4,background:D.bg3,color:D.text2,border:`1px solid ${D.border}`,flexShrink:0}}>
+                          Completar
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
               {!alertsEnabled && <div style={{fontSize:11,color:D.text3,padding:"4px 4px 2px"}}>Desactivadas</div>}
@@ -959,6 +1379,15 @@ export default function App() {
                 title={sidebarOpen?"Ocultar panel":"Mostrar panel"}
                 style={{width:20,height:20,borderRadius:"50%",background:D.bg2,border:`1px solid ${D.border2}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,color:D.text2,flexShrink:0,padding:0}}>
                 {sidebarOpen?"‹":"›"}
+              </button>
+              {/* Undo/Redo — subtle, disabled when empty */}
+              <button className="btn" onClick={undoSchedule} disabled={!undoStack.length} title="Deshacer (Ctrl+Z)"
+                style={{width:22,height:22,borderRadius:6,background:"none",border:"none",display:"flex",alignItems:"center",justifyContent:"center",color:undoStack.length?D.text2:D.text3,opacity:undoStack.length?1:.35,cursor:undoStack.length?"pointer":"default",flexShrink:0,padding:0}}>
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 5.5H9a3 3 0 0 1 0 6H6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/><path d="M5.5 3L3 5.5 5.5 8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              </button>
+              <button className="btn" onClick={redoSchedule} disabled={!redoStack.length} title="Rehacer (Ctrl+Shift+Z)"
+                style={{width:22,height:22,borderRadius:6,background:"none",border:"none",display:"flex",alignItems:"center",justifyContent:"center",color:redoStack.length?D.text2:D.text3,opacity:redoStack.length?1:.35,cursor:redoStack.length?"pointer":"default",flexShrink:0,padding:0,marginRight:2}}>
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M11 5.5H5a3 3 0 0 0 0 6H8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/><path d="M8.5 3L11 5.5 8.5 8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
               </button>
               <div style={{background:D.bg3,borderRadius:6,padding:3,display:"flex",gap:1}}>
                 <button className={`vtab ${view==="week"?"active":""}`} onClick={()=>setView("week")}>WK</button>
@@ -983,10 +1412,10 @@ export default function App() {
                   ))}
                 </div>
                 <button className="nav-btn" onClick={()=>{
-                    const res=generateWeekProposal(schedule,visible,shifts,customRules,wSched);
-                    if(res.proposal) setProposal(res.proposal);
-                    else alert(res.reason);
-                  }} title="Generar semana automáticamente según patrones históricos"
+                    const res=generateWeekProposal(schedule,users,shifts,customRules,wSched,wo,[...FIXED_USERS,...extra],safeGet(pfx+"area_archive",{}),company);
+                    if(res.proposal){ setProposal(res.proposal); setProposalMeta({count:res.count}); }
+                    else { alert(res.reason); setProposalMeta(null); }
+                  }} title="Generar semana automáticamente equilibrando por área según el historial"
                   style={{fontSize:11,color:D.text2,display:"flex",alignItems:"center",gap:4}}>
                   <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
                     <path d="M6.5 1v2M6.5 10v2M1 6.5h2M10 6.5h2M2.6 2.6l1.4 1.4M9 9l1.4 1.4M2.6 10.4L4 9M9 4l1.4-1.4" stroke={D.text2} strokeWidth="1.2" strokeLinecap="round"/>
@@ -1005,28 +1434,63 @@ export default function App() {
             {proposal && view==="week" && (
               <div style={{display:"flex",alignItems:"center",gap:10,padding:"8px 16px",background:dark?"#1A2A1A":"#F0FAF4",borderBottom:`1px solid ${dark?"#2A4A2A":"#A8DDB8"}`,flexShrink:0}}>
                 <span style={{fontSize:12,color:dark?"#7ACC8F":"#2D7A4A",fontWeight:500}}>
-                  ✓ Propuesta generada · {Object.keys(proposal).length} turnos sugeridos (punteados)
+                  ✓ Propuesta generada · {Object.keys(proposal).length} turnos sugeridos (punteados), equilibrados por área
                 </span>
                 <div style={{marginLeft:"auto",display:"flex",gap:6}}>
                   <button className="btn" onClick={()=>{
+                      pushUndoSnapshot();
                       setSchedule(p=>({...p,[wk]:{...(p[wk]||{}),...proposal}}));
-                      setProposal(null);
+                      setProposal(null); setProposalMeta(null);
                     }}
                     style={{fontSize:11,padding:"5px 12px",borderRadius:5,background:"#2D7A4A",color:"#fff",fontWeight:500}}>
                     Aceptar
                   </button>
                   <button className="btn" onClick={()=>{
-                      const res=generateWeekProposal(schedule,visible,shifts,customRules,wSched);
-                      if(res.proposal) setProposal(res.proposal); else { alert(res.reason); setProposal(null); }
+                      const res=generateWeekProposal(schedule,users,shifts,customRules,wSched,wo,[...FIXED_USERS,...extra],safeGet(pfx+"area_archive",{}),company);
+                      if(res.proposal){ setProposal(res.proposal); setProposalMeta({count:res.count}); }
+                      else { alert(res.reason); setProposal(null); setProposalMeta(null); }
                     }}
                     style={{fontSize:11,padding:"5px 12px",borderRadius:5,background:"none",color:dark?"#7ACC8F":"#2D7A4A",border:`1px solid ${dark?"#2A4A2A":"#A8DDB8"}`}}>
                     Regenerar
                   </button>
-                  <button className="btn" onClick={()=>setProposal(null)}
+                  <button className="btn" onClick={()=>{ setProposal(null); setProposalMeta(null); }}
                     style={{fontSize:11,padding:"5px 12px",borderRadius:5,background:"none",color:D.text2,border:`1px solid ${D.border}`}}>
                     Descartar
                   </button>
                 </div>
+              </div>
+            )}
+
+            {cellClip && !multiSel && (
+              <div style={{position:"absolute",bottom:16,left:"50%",transform:"translateX(-50%)",zIndex:30,display:"flex",alignItems:"center",gap:8,padding:"6px 8px 6px 12px",borderRadius:20,background:dark?"rgba(30,30,30,.95)":"rgba(255,255,255,.97)",border:`1px solid ${D.border2}`,boxShadow:`0 4px 16px rgba(0,0,0,${dark?.4:.12})`}}>
+                <span style={{fontSize:11,color:D.text2}}>
+                  {cellClip.areaDay ? `${cellClip.entries.length} turnos de ${cellClip.area} copiados · ${cellClip.sourceDay}` : cellClip.seq ? `${cellClip.seq.length} turnos copiados${cellClip.fromLabel?` · ${cellClip.fromLabel}`:""}` : `Turno copiado${cellClip.fromLabel?` · ${cellClip.fromLabel}`:""}`}
+                </span>
+                <button className="btn" onClick={()=>setCellClip(null)}
+                  style={{width:22,height:22,borderRadius:"50%",background:D.bg3,color:D.text2,fontSize:13,display:"flex",alignItems:"center",justifyContent:"center",padding:0}}>
+                  ×
+                </button>
+              </div>
+            )}
+
+            {multiSel && multiSel.days.length>0 && (
+              <div style={{position:"absolute",bottom:16,left:"50%",transform:"translateX(-50%)",zIndex:30,display:"flex",alignItems:"center",gap:8,padding:"6px 8px 6px 12px",borderRadius:20,background:dark?"rgba(30,30,30,.95)":"rgba(255,255,255,.97)",border:`1px solid ${D.border2}`,boxShadow:`0 4px 16px rgba(0,0,0,${dark?.4:.12})`}}>
+                <span style={{fontSize:11,color:D.text2}}>{multiSel.days.length} día{multiSel.days.length>1?"s":""} seleccionado{multiSel.days.length>1?"s":""}</span>
+                <button className="btn" onClick={()=>{
+                    const ordered=[...multiSel.days].sort((a,b)=>DAYS.indexOf(a)-DAYS.indexOf(b));
+                    const baseIdx=DAYS.indexOf(ordered[0]);
+                    const seq=ordered.map(d=>({offset:DAYS.indexOf(d)-baseIdx, val:wSched[`${d}-${multiSel.uid}`]})).filter(x=>x.val);
+                    const uName=visible.find(u=>u.id===multiSel.uid)?.name||"";
+                    setCellClip({seq, fromLabel:uName});
+                    setMultiSel(null);
+                  }}
+                  style={{fontSize:11,padding:"4px 11px",borderRadius:14,background:D.tabActive,color:D.tabActiveText,fontWeight:500}}>
+                  Copiar
+                </button>
+                <button className="btn" onClick={()=>setMultiSel(null)}
+                  style={{width:22,height:22,borderRadius:"50%",background:D.bg3,color:D.text2,fontSize:13,display:"flex",alignItems:"center",justifyContent:"center",padding:0}}>
+                  ×
+                </button>
               </div>
             )}
 
@@ -1035,7 +1499,8 @@ export default function App() {
                   dragging={dragging} dragOver={dragOver}
                   setPicker={setPicker} removeW={removeW}
                   userHoursW={userHoursW} areaF={areaF} onUserClick={u=>setProfileUser(u)}
-                  assignW={assignW} startDrag={startDrag} dark={dark} D={D} company={company} proposal={proposal} />
+                  assignW={assignW} startDrag={startDrag} dark={dark} D={D} company={company} proposal={proposal}
+                  cellClip={cellClip} setCellClip={setCellClip} multiSel={multiSel} setMultiSel={setMultiSel} />
               : <MonthCal users={visible} shifts={shifts} schedule={schedule} monthRef={monthRef} dark={dark}
                   dragging={dragging} dragOver={dragOver} setDragOver={setDragOver}
                   setPicker={setPicker} dropM={dropM} removeM={removeM} setDragging={setDragging} />
@@ -1043,6 +1508,7 @@ export default function App() {
           </div>
         </div>
       )}
+
 
       {/* ── TAREAS ── */}
       {tab==="tasks" && <TasksTab users={users} schedule={schedule} dark={dark} company={company} pfx={pfx} />}
@@ -1055,7 +1521,7 @@ export default function App() {
             <button className="btn" onClick={()=>{ setEditUser(null); setUserModal(true); }} style={{background:"#111",color:"#fff",padding:"7px 14px",borderRadius:6,fontSize:13,fontWeight:500}}>+ Nueva persona</button>
           </div>
           {company.areas.map(area=>{
-            const allInArea=[...FIXED_USERS,...extra].filter(u=>u.area===area);
+            const allInArea=[...FIXED_USERS,...extra].filter(u=>u.area===area && !hidden.includes(u.id));
             return (
               <div key={area} style={{marginBottom:28}}>
                 <div style={{fontSize:11,fontWeight:700,color:"#AAA",textTransform:"uppercase",letterSpacing:".7px",marginBottom:10}}>{area}</div>
@@ -1074,7 +1540,13 @@ export default function App() {
                         <button className="btn" title={`Eliminar ${u.name}`} onClick={()=>{
                           if(window.confirm(`¿Eliminar a ${u.name}? Se borrará del horario permanentemente.`)){
                             if(isFixed) setHidden(p=>[...p,u.id]);
-                            else setExtra(p=>p.filter(x=>x.id!==u.id));
+                            else {
+                              // Archive id->area (no personal data) so past shifts remain attributable for learning
+                              const archive = safeGet(pfx+"area_archive", {});
+                              archive[u.id] = u.area;
+                              safeSet(pfx+"area_archive", archive);
+                              setExtra(p=>p.filter(x=>x.id!==u.id));
+                            }
                           }
                         }} style={{background:"none",border:`1px solid ${D.border}`,color:"#9B2335",padding:"5px 8px",borderRadius:5,display:"flex",alignItems:"center",justifyContent:"center"}}>
                           <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
@@ -1240,7 +1712,7 @@ export default function App() {
 
       {templateModal && <TemplateModal
         templates={templates} setTemplates={setTemplates}
-        wo={wo} monthRef={monthRef}
+        wo={wo} monthRef={monthRef} dark={dark}
         currentWeekLabel={weekLabel(wo)}
         onSave={saveAsTemplate}
         onApplyWeek={(tpl,wo2)=>applyTemplate(tpl,wo2)}
@@ -1324,7 +1796,7 @@ export default function App() {
 }
 
 // ─── WEEK GRID ────────────────────────────────────────────────────────────────
-function WeekGrid({ users, shifts, dates, wSched, dragging, dragOver, setPicker, removeW, userHoursW, areaF, onUserClick, assignW, startDrag, dark, D, company, proposal }) {
+function WeekGrid({ users, shifts, dates, wSched, dragging, dragOver, setPicker, removeW, userHoursW, areaF, onUserClick, assignW, startDrag, dark, D, company, proposal, cellClip, setCellClip, multiSel, setMultiSel }) {
   const today=new Date(); today.setHours(0,0,0,0);
   const showSep=areaF==="Todas";
   const rows=[];
@@ -1429,12 +1901,58 @@ function WeekGrid({ users, shifts, dates, wSched, dragging, dragOver, setPicker,
                   const loU=Math.min(frIdx,trIdx), hiU=Math.max(frIdx,trIdx);
                   return di>=loD && di<=hiD && myRowIdx>=loU && myRowIdx<=hiU;
                 })();
-                return <td key={day} className={`wcell ${isOver?"drag-ov":""}`}
+                const isSelected = multiSel && multiSel.uid===u.id && multiSel.days.includes(day);
+                return <td key={day} className={`wcell ${isOver?"drag-ov":""} ${cellClip?"paste-target":""}`}
                   data-cellkey={`${day}||${u.id}`}
                   data-fillkey="1" data-filluid={u.id} data-fillidx={di}
-                  onClick={()=>{ if(!dragging && !filling && !val) setPicker({day,uid:u.id}); }}
-                  style={{padding:"4px 4px",borderRadius:isOver?6:0,borderLeft:`1px solid ${D.border}`,cursor:val?"grab":"pointer",background:isFillHighlight?(dark?"#252525":"#F5F5F5"):D.cell}}>
-                  <div style={{position:"relative",minHeight:38}} className={val?"cell-filled":""}
+                  onClick={e=>{
+                    if(dragging||filling) return;
+                    if(e.shiftKey){
+                      // Copy the whole area's lineup for this day (e.g. all of Cocina, or all of Caja/Salón)
+                      const areaUsers = users.filter(x=>x.area===u.area);
+                      const entries = areaUsers
+                        .map(x=>({uid:x.id, val:wSched[`${day}-${x.id}`]}))
+                        .filter(e2=>e2.val);
+                      if(!entries.length) return;
+                      setCellClip({areaDay:true, area:u.area, sourceDay:day, entries, fromLabel:`${u.area} · ${day}`});
+                      return;
+                    }
+                    if(e.ctrlKey||e.metaKey){
+                      if(!val) return; // only select filled cells
+                      setMultiSel(prev=>{
+                        if(!prev || prev.uid!==u.id) return {uid:u.id, days:[day]};
+                        const has=prev.days.includes(day);
+                        return {uid:u.id, days: has ? prev.days.filter(d=>d!==day) : [...prev.days, day]};
+                      });
+                      return;
+                    }
+                    if(cellClip){
+                      if(cellClip.areaDay){
+                        cellClip.entries.forEach(({uid,val:sv})=>assignW(day, uid, sv));
+                        setCellClip(null);
+                        return;
+                      }
+                      if(cellClip.seq){
+                        const baseIdx=DAYS.indexOf(day);
+                        cellClip.seq.forEach(({offset,val:sv})=>{
+                          const targetIdx=baseIdx+offset;
+                          if(targetIdx>=0 && targetIdx<7) assignW(DAYS[targetIdx], u.id, sv);
+                        });
+                      } else {
+                        assignW(day,u.id,cellClip.val);
+                      }
+                      setCellClip(null);
+                      return;
+                    }
+                    if(!val) setPicker({day,uid:u.id});
+                  }}
+                  onContextMenu={e=>{
+                    e.preventDefault();
+                    if(!val) return;
+                    setCellClip({val, fromLabel:isSpec(val)?getSpec(val).label:(()=>{const s=shifts.find(x=>x.id===val);return s?`${s.start}–${s.end}`:"";})()});
+                  }}
+                  style={{padding:"4px 4px",borderRadius:isOver?6:0,borderLeft:`1px solid ${D.border}`,cursor:cellClip?"copy":val?"grab":"pointer",background:isSelected?(dark?"#3A3010":"#FFF6D8"):isFillHighlight?(dark?"#252525":"#F5F5F5"):D.cell,outline:isSelected?`2px solid ${dark?"#8A6D00":"#D4AF00"}`:"none",outlineOffset:-2}}>
+                  <div style={{position:"relative",height:38}} className={val?"cell-filled":""}
                     onPointerDown={val?e=>{
                       // Only start move drag if not clicking the rm button or fill handle
                       if(e.target.closest(".rm")||e.target.closest(".fill-handle")) return;
@@ -2004,10 +2522,26 @@ function TasksTab({ users, schedule, dark, company, pfx }) {
 function ProfileModal({ user, users, shifts, schedule, dark, company, pfx, onClose, onEdit, initialWo }) {
   const D = getD(dark);
   const [wo, setWo] = useState(initialWo||0);
+  const [pview, setPview] = useState("week"); // "week" | "month"
+  const now0=new Date();
+  const [pMonth, setPMonth] = useState({y:now0.getFullYear(), m:now0.getMonth()});
   const printRef = useRef();
   const wk = wKey(wo);
   const wSched = schedule[wk]||{};
   const dates = weekDates(wo);
+
+  // Monthly rows for this user
+  const monthDatesList = monthDates(pMonth.y, pMonth.m);
+  let monthTotalH=0;
+  const monthRows = monthDatesList.map(date=>{
+    const c = cellByDate(schedule, date, user.id);
+    let label="—";
+    if(c){
+      if(isSpec(c)) label=getSpec(c).label;
+      else { const s=shifts.find(x=>x.id===c); if(s){ label=`${s.start}–${s.end}`; monthTotalH+=shiftH(s); } }
+    }
+    return {date, label};
+  });
 
   // Compute task assignments using company config
   const rotOrder = company?.rotationOrder||[];
@@ -2047,6 +2581,20 @@ function ProfileModal({ user, users, shifts, schedule, dark, company, pfx, onClo
   }).map(d=>DAYS[(d.getDay()+6)%7]);
 
   function printPDF(){
+    const isMonth = pview==="month";
+    const bodyRows = isMonth
+      ? monthRows.map(r=>{
+          const di=(r.date.getDay()+6)%7;
+          const dayDate=`${DAY_SHORT[di]} ${r.date.getDate()}`;
+          const isOff=r.label==="—"||r.label==="Libre";
+          return `<tr><td class="day">${dayDate}</td><td class="${isOff?"dim":""}">${r.label}</td></tr>`;
+        }).join("")
+      : dayRows.map(r=>{
+          const dayDate=`${r.day} ${r.date?.getDate()}`;
+          const isOff=r.label==="—"||r.label==="Libre";
+          return `<tr><td class="day">${dayDate}</td><td class="${isOff?"dim":""}">${r.label}</td></tr>`;
+        }).join("");
+    const periodLabel = isMonth ? `${MONTH_NAMES[pMonth.m]} ${pMonth.y}` : weekLabel(wo);
     const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Perfil ${user.name}</title>
     <style>
       @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
@@ -2067,25 +2615,15 @@ function ProfileModal({ user, users, shifts, schedule, dark, company, pfx, onClo
       @media print{body{padding:28px 36px;}}
     </style></head><body>
     <h1>${user.name}</h1>
-    <div class="meta">${user.role||"Sin cargo"} &nbsp;·&nbsp; ${user.area} &nbsp;·&nbsp; ${weekLabel(wo)}</div>
+    <div class="meta">${user.role||"Sin cargo"} &nbsp;·&nbsp; ${user.area} &nbsp;·&nbsp; ${periodLabel}</div>
 
     <div class="sec-title">Horario</div>
     <table>
       <thead><tr><th style="width:38%">Día</th><th>Horario</th></tr></thead>
-      <tbody>
-      ${dayRows.map(r=>{
-        const dateStr=r.date?.toLocaleDateString("es-CL",{day:"numeric",month:"long"});
-        const dayDate=`${r.day} ${r.date?.getDate()}`;
-        const isOff=r.label==="—"||r.label==="Libre";
-        return `<tr>
-          <td class="day">${dayDate}</td>
-          <td class="${isOff?"dim":""}">${r.label}</td>
-        </tr>`;
-      }).join("")}
-      </tbody>
+      <tbody>${bodyRows}</tbody>
     </table>
 
-    ${user.area==="Cocina"&&(rotTask||fixTask||colacionDays.length>0)?`
+    ${!isMonth && user.area==="Cocina"&&(rotTask||fixTask||colacionDays.length>0)?`
     <div class="sec-title">Tareas esta semana</div>
     <div style="border:1px solid #EBEBEB;border-radius:6px;overflow:hidden;">
       ${rotTask?`<div class="task-item">${rotTask}</div>`:""}
@@ -2123,13 +2661,28 @@ function ProfileModal({ user, users, shifts, schedule, dark, company, pfx, onClo
           </div>
         </div>
 
-        {/* Week nav */}
-        <div style={{padding:"10px 24px",borderBottom:`1px solid ${D.border}`,display:"flex",alignItems:"center",gap:8}}>
-          <button className="nav-btn" onClick={()=>setWo(w=>w-1)}>‹</button>
-          <span style={{fontSize:12,fontWeight:500,color:D.text,flex:1,textAlign:"center"}}>{weekLabel(wo)}</span>
-          <button className="nav-btn" onClick={()=>setWo(w=>w+1)}>›</button>
-          <button className="nav-btn" onClick={()=>setWo(0)} style={{fontSize:10,color:D.text2}}>Hoy</button>
+        {/* View toggle */}
+        <div style={{padding:"10px 24px 0",display:"flex",gap:6}}>
+          <button className="btn" onClick={()=>setPview("week")} style={{fontSize:11,fontWeight:500,padding:"5px 12px",borderRadius:6,background:pview==="week"?D.tabActive:D.bg3,color:pview==="week"?D.tabActiveText:D.text2}}>Semana</button>
+          <button className="btn" onClick={()=>setPview("month")} style={{fontSize:11,fontWeight:500,padding:"5px 12px",borderRadius:6,background:pview==="month"?D.tabActive:D.bg3,color:pview==="month"?D.tabActiveText:D.text2}}>Mes</button>
         </div>
+
+        {/* Week/Month nav */}
+        {pview==="week" ? (
+          <div style={{padding:"10px 24px",borderBottom:`1px solid ${D.border}`,display:"flex",alignItems:"center",gap:8}}>
+            <button className="nav-btn" onClick={()=>setWo(w=>w-1)}>‹</button>
+            <span style={{fontSize:12,fontWeight:500,color:D.text,flex:1,textAlign:"center"}}>{weekLabel(wo)}</span>
+            <button className="nav-btn" onClick={()=>setWo(w=>w+1)}>›</button>
+            <button className="nav-btn" onClick={()=>setWo(0)} style={{fontSize:10,color:D.text2}}>Hoy</button>
+          </div>
+        ) : (
+          <div style={{padding:"10px 24px",borderBottom:`1px solid ${D.border}`,display:"flex",alignItems:"center",gap:8}}>
+            <button className="nav-btn" onClick={()=>setPMonth(m=>{const d=new Date(m.y,m.m-1,1);return{y:d.getFullYear(),m:d.getMonth()};})}>‹</button>
+            <span style={{fontSize:12,fontWeight:500,color:D.text,flex:1,textAlign:"center"}}>{MONTH_NAMES[pMonth.m]} {pMonth.y}</span>
+            <button className="nav-btn" onClick={()=>setPMonth(m=>{const d=new Date(m.y,m.m+1,1);return{y:d.getFullYear(),m:d.getMonth()};})}>›</button>
+            <button className="nav-btn" onClick={()=>setPMonth({y:now0.getFullYear(),m:now0.getMonth()})} style={{fontSize:10,color:D.text2}}>Hoy</button>
+          </div>
+        )}
 
         <div ref={printRef} style={{padding:"18px 24px"}}>
           {/* Schedule */}
@@ -2142,22 +2695,32 @@ function ProfileModal({ user, users, shifts, schedule, dark, company, pfx, onClo
               </tr>
             </thead>
             <tbody>
-              {dayRows.map((r,i)=>(
+              {pview==="week" ? dayRows.map((r,i)=>(
                 <tr key={r.day} style={{borderBottom:i<6?`1px solid ${D.border}`:"none"}}>
                   <td style={{padding:"8px 10px",fontSize:12,fontWeight:500,color:D.text,whiteSpace:"nowrap"}}>
                     {r.day} <span style={{fontWeight:400,color:D.text2}}>{r.date?.getDate()}</span>
                   </td>
                   <td style={{padding:"8px 10px",fontSize:12,color:r.label==="—"?D.text3:D.text}}>{r.label}</td>
                 </tr>
-              ))}
+              )) : monthRows.map((r,i)=>{
+                const di=(r.date.getDay()+6)%7;
+                return (
+                  <tr key={i} style={{borderBottom:i<monthRows.length-1?`1px solid ${D.border}`:"none"}}>
+                    <td style={{padding:"8px 10px",fontSize:12,fontWeight:500,color:D.text,whiteSpace:"nowrap"}}>
+                      {DAY_SHORT[di]} <span style={{fontWeight:400,color:D.text2}}>{r.date.getDate()}</span>
+                    </td>
+                    <td style={{padding:"8px 10px",fontSize:12,color:r.label==="—"?D.text3:D.text}}>{r.label}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
-          <div style={{textAlign:"right",fontSize:11,color:totalH>RULES.WEEK_H?"#9B2335":totalH>=42?"#3D7A61":D.text2,marginBottom:22}}>
-            {totalH.toFixed(1)}h / 44h
+          <div style={{textAlign:"right",fontSize:11,color:(pview==="week"?totalH:monthTotalH)>RULES.WEEK_H?"#9B2335":(pview==="week"?totalH:monthTotalH)>=42?"#3D7A61":D.text2,marginBottom:22}}>
+            {pview==="week" ? `${totalH.toFixed(1)}h / 44h` : `${monthTotalH.toFixed(1)}h este mes`}
           </div>
 
           {/* Tasks */}
-          {user.area==="Cocina" && (rotTask||fixTask||colacionDays.length>0) && (
+          {pview==="week" && user.area==="Cocina" && (rotTask||fixTask||colacionDays.length>0) && (
             <>
               <div style={{fontSize:10,fontWeight:700,color:D.text2,textTransform:"uppercase",letterSpacing:".7px",marginBottom:10}}>Tareas esta semana</div>
               <div style={{border:`1px solid ${D.border}`,borderRadius:8,overflow:"hidden"}}>
@@ -2507,14 +3070,14 @@ function WizardModal({ dark, onClose, onComplete }) {
 }
 
 
-function TemplateModal({ templates, setTemplates, wo, monthRef, currentWeekLabel, onSave, onApplyWeek, onApplyMonth, onClose }) {
+function TemplateModal({ templates, setTemplates, wo, monthRef, currentWeekLabel, onSave, onApplyWeek, onApplyMonth, onClose, dark }) {
+  const D = getD(dark);
   const [view,      setView]      = useState("list"); // "list" | "save" | "apply"
   const [saveName,  setSaveName]  = useState(`WK${templates.length+1}`);
   const [selTpl,    setSelTpl]    = useState(null);
   const [applyMode, setApplyMode] = useState("week"); // "week" | "month"
   const [applyWo,   setApplyWo]   = useState(wo);
   const [applyMonth,setApplyMonth]= useState(monthRef);
-  const [confirm,   setConfirm]   = useState(false);
 
   const today=new Date();
 
@@ -2525,26 +3088,24 @@ function TemplateModal({ templates, setTemplates, wo, monthRef, currentWeekLabel
     onClose();
   }
 
-  const MONTH_NAMES_SHORT=["Ene","Feb","Mar","Apr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
-
   return (
     <div className="modal-bg" onClick={onClose}>
-      <div className="modal" onClick={e=>e.stopPropagation()} style={{width:440,maxHeight:"88vh",overflowY:"auto",padding:0}}>
+      <div className="modal" onClick={e=>e.stopPropagation()} style={{width:440,maxHeight:"88vh",overflowY:"auto",padding:0,background:D.bg2,border:`1px solid ${D.border}`}}>
 
         {/* Header */}
-        <div style={{padding:"20px 24px 16px",borderBottom:"1px solid #F0F0F0",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <div style={{padding:"20px 24px 16px",borderBottom:`1px solid ${D.border}`,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
           <div>
-            <div style={{fontSize:15,fontWeight:700}}>Plantillas de horario</div>
-            <div style={{fontSize:12,color:"#AAA",marginTop:2}}>Guarda y aplica semanas completas</div>
+            <div style={{fontSize:15,fontWeight:700,color:D.text}}>Plantillas de horario</div>
+            <div style={{fontSize:12,color:D.text2,marginTop:2}}>Guarda y aplica semanas completas</div>
           </div>
-          <button className="btn" onClick={onClose} style={{background:"none",color:"#BBB",fontSize:18,padding:"0 4px"}}>×</button>
+          <button className="btn" onClick={onClose} style={{background:"none",color:D.text2,fontSize:18,padding:"0 4px"}}>×</button>
         </div>
 
         {/* Tabs */}
-        <div style={{display:"flex",borderBottom:"1px solid #F0F0F0",padding:"0 24px"}}>
+        <div style={{display:"flex",borderBottom:`1px solid ${D.border}`,padding:"0 24px"}}>
           {[["list","Mis plantillas"],["save","Guardar actual"],["apply","Aplicar"]].map(([v,l])=>(
             <button key={v} className="btn" onClick={()=>setView(v)}
-              style={{padding:"11px 0",marginRight:20,fontSize:13,fontWeight:500,color:view===v?"#111":"#AAA",borderBottom:view===v?"2px solid #111":"2px solid transparent",borderRadius:0,background:"none"}}>
+              style={{padding:"11px 0",marginRight:20,fontSize:13,fontWeight:500,color:view===v?D.text:D.text3,borderBottom:view===v?`2px solid ${D.tabActive}`:"2px solid transparent",borderRadius:0,background:"none"}}>
               {l}
             </button>
           ))}
@@ -2556,29 +3117,28 @@ function TemplateModal({ templates, setTemplates, wo, monthRef, currentWeekLabel
           {view==="list" && (
             <div>
               {templates.length===0 && (
-                <div style={{textAlign:"center",padding:"32px 0",color:"#AAA"}}>
+                <div style={{textAlign:"center",padding:"32px 0",color:D.text3}}>
                   <div style={{fontSize:28,marginBottom:8}}>📋</div>
                   <div style={{fontSize:13}}>Sin plantillas aún.</div>
-                  <button className="btn" onClick={()=>setView("save")} style={{marginTop:12,background:"#111",color:"#fff",padding:"7px 16px",borderRadius:6,fontSize:12}}>
+                  <button className="btn" onClick={()=>setView("save")} style={{marginTop:12,background:D.tabActive,color:D.tabActiveText,padding:"7px 16px",borderRadius:6,fontSize:12,fontWeight:500}}>
                     Guardar semana actual
                   </button>
                 </div>
               )}
               {templates.map(tpl=>(
-                <div key={tpl.id} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 14px",borderRadius:9,border:"1px solid #F0F0F0",marginBottom:6,transition:"background .12s"}}
-                  onMouseEnter={e=>e.currentTarget.style.background="#FAFAFA"} onMouseLeave={e=>e.currentTarget.style.background="#fff"}>
+                <div key={tpl.id} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 14px",borderRadius:9,border:`1px solid ${D.border}`,marginBottom:6,background:D.bg}}>
                   <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontSize:13,fontWeight:600,color:"#111"}}>{tpl.name}</div>
-                    <div style={{fontSize:11,color:"#AAA",marginTop:2}}>Guardada el {tpl.savedAt} · basada en {tpl.weekLabel}</div>
-                    <div style={{fontSize:11,color:"#888",marginTop:1}}>{Object.keys(tpl.data).length} asignaciones</div>
+                    <div style={{fontSize:13,fontWeight:600,color:D.text}}>{tpl.name}</div>
+                    <div style={{fontSize:11,color:D.text3,marginTop:2}}>Guardada el {tpl.savedAt} · basada en {tpl.weekLabel}</div>
+                    <div style={{fontSize:11,color:D.text2,marginTop:1}}>{Object.keys(tpl.data).length} asignaciones</div>
                   </div>
                   <div style={{display:"flex",gap:6,flexShrink:0}}>
                     <button className="btn" onClick={()=>{ setSelTpl(tpl); setView("apply"); }}
-                      style={{background:"#111",color:"#fff",padding:"5px 11px",borderRadius:6,fontSize:12,fontWeight:500}}>
+                      style={{background:D.tabActive,color:D.tabActiveText,padding:"5px 11px",borderRadius:6,fontSize:12,fontWeight:500}}>
                       Aplicar
                     </button>
                     <button className="btn" onClick={()=>setTemplates(p=>p.filter(x=>x.id!==tpl.id))}
-                      style={{background:"#FBF0F0",color:"#9B2335",padding:"5px 10px",borderRadius:6,fontSize:12}}>
+                      style={{background:"none",border:`1px solid ${D.border}`,color:"#C0455A",padding:"5px 9px",borderRadius:6,fontSize:12}}>
                       ×
                     </button>
                   </div>
@@ -2590,19 +3150,19 @@ function TemplateModal({ templates, setTemplates, wo, monthRef, currentWeekLabel
           {/* SAVE */}
           {view==="save" && (
             <div>
-              <div style={{fontSize:12,color:"#666",marginBottom:16,lineHeight:1.6}}>
-                Guarda el horario de la semana <strong style={{color:"#111"}}>{currentWeekLabel}</strong> como plantilla reutilizable. Incluye todos los turnos asignados de Cocina y Caja.
+              <div style={{fontSize:12,color:D.text2,marginBottom:16,lineHeight:1.6}}>
+                Guarda el horario de la semana <strong style={{color:D.text}}>{currentWeekLabel}</strong> como plantilla reutilizable. Incluye todos los turnos asignados de Cocina y Caja.
               </div>
               <span className="lbl">Nombre de la plantilla</span>
               <input value={saveName} onChange={e=>setSaveName(e.target.value)}
                 placeholder="Ej: WK1, Turno habitual, Semana punta..." autoFocus
                 style={{marginTop:6}}
                 onKeyDown={e=>{ if(e.key==="Enter"&&saveName.trim()){ onSave(saveName.trim()); setView("list"); setSaveName(`WK${templates.length+2}`); }}}/>
-              <div style={{fontSize:11,color:"#AAA",marginTop:8}}>Presiona Enter o clic en Guardar.</div>
+              <div style={{fontSize:11,color:D.text3,marginTop:8}}>Presiona Enter o clic en Guardar.</div>
               <div style={{display:"flex",gap:8,marginTop:20}}>
-                <button className="btn" onClick={()=>setView("list")} style={{flex:1,background:"#F3F4F6",color:"#555",padding:"9px",borderRadius:7,fontSize:13}}>Cancelar</button>
+                <button className="btn" onClick={()=>setView("list")} style={{flex:1,background:D.bg3,color:D.text,padding:"9px",borderRadius:7,fontSize:13,border:`1px solid ${D.border}`}}>Cancelar</button>
                 <button className="btn" onClick={()=>{ if(saveName.trim()){ onSave(saveName.trim()); setView("list"); setSaveName(`WK${templates.length+2}`); }}}
-                  style={{flex:1,background:"#111",color:"#fff",padding:"9px",borderRadius:7,fontSize:13,fontWeight:500}}>
+                  style={{flex:1,background:D.tabActive,color:D.tabActiveText,padding:"9px",borderRadius:7,fontSize:13,fontWeight:500}}>
                   Guardar plantilla
                 </button>
               </div>
@@ -2615,16 +3175,16 @@ function TemplateModal({ templates, setTemplates, wo, monthRef, currentWeekLabel
               {/* Seleccionar plantilla */}
               <span className="lbl">Plantilla</span>
               <div style={{marginTop:6,marginBottom:16}}>
-                {templates.length===0 && <div style={{fontSize:12,color:"#AAA"}}>No hay plantillas guardadas.</div>}
+                {templates.length===0 && <div style={{fontSize:12,color:D.text3}}>No hay plantillas guardadas.</div>}
                 {templates.map(tpl=>(
                   <div key={tpl.id} onClick={()=>setSelTpl(tpl)}
-                    style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",borderRadius:8,marginBottom:4,border:`1.5px solid ${selTpl?.id===tpl.id?"#111":"#EBEBEB"}`,cursor:"pointer",transition:"all .13s",background:selTpl?.id===tpl.id?"#FAFAFA":"#fff"}}>
-                    <div style={{width:14,height:14,borderRadius:"50%",border:`2px solid ${selTpl?.id===tpl.id?"#111":"#DDD"}`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                      {selTpl?.id===tpl.id && <div style={{width:6,height:6,borderRadius:"50%",background:"#111"}}/>}
+                    style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",borderRadius:8,marginBottom:4,border:`1.5px solid ${selTpl?.id===tpl.id?D.tabActive:D.border}`,cursor:"pointer",background:selTpl?.id===tpl.id?D.bg3:D.bg}}>
+                    <div style={{width:14,height:14,borderRadius:"50%",border:`2px solid ${selTpl?.id===tpl.id?D.tabActive:D.text3}`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                      {selTpl?.id===tpl.id && <div style={{width:6,height:6,borderRadius:"50%",background:D.tabActive}}/>}
                     </div>
                     <div>
-                      <div style={{fontSize:13,fontWeight:500,color:"#111"}}>{tpl.name}</div>
-                      <div style={{fontSize:11,color:"#AAA"}}>{Object.keys(tpl.data).length} asignaciones · {tpl.savedAt}</div>
+                      <div style={{fontSize:13,fontWeight:500,color:D.text}}>{tpl.name}</div>
+                      <div style={{fontSize:11,color:D.text3}}>{Object.keys(tpl.data).length} asignaciones · {tpl.savedAt}</div>
                     </div>
                   </div>
                 ))}
@@ -2635,7 +3195,7 @@ function TemplateModal({ templates, setTemplates, wo, monthRef, currentWeekLabel
               <div style={{display:"flex",gap:6,marginTop:6,marginBottom:16}}>
                 {[["week","Semana"],["month","Mes completo"]].map(([v,l])=>(
                   <button key={v} className="btn" onClick={()=>setApplyMode(v)}
-                    style={{flex:1,padding:"8px",borderRadius:7,fontSize:13,fontWeight:500,background:applyMode===v?"#111":"#F5F5F5",color:applyMode===v?"#fff":"#444",border:"none",transition:"all .15s"}}>
+                    style={{flex:1,padding:"8px",borderRadius:7,fontSize:13,fontWeight:500,background:applyMode===v?D.tabActive:D.bg3,color:applyMode===v?D.tabActiveText:D.text2,border:`1px solid ${applyMode===v?D.tabActive:D.border}`}}>
                     {l}
                   </button>
                 ))}
@@ -2647,9 +3207,9 @@ function TemplateModal({ templates, setTemplates, wo, monthRef, currentWeekLabel
                   <span className="lbl">Semana</span>
                   <div style={{display:"flex",alignItems:"center",gap:8,marginTop:6}}>
                     <button className="nav-btn" onClick={()=>setApplyWo(w=>w-1)}>‹</button>
-                    <span style={{flex:1,textAlign:"center",fontSize:13,fontWeight:500,color:"#333"}}>{weekLabel(applyWo)}</span>
+                    <span style={{flex:1,textAlign:"center",fontSize:13,fontWeight:500,color:D.text}}>{weekLabel(applyWo)}</span>
                     <button className="nav-btn" onClick={()=>setApplyWo(w=>w+1)}>›</button>
-                    <button className="nav-btn" onClick={()=>setApplyWo(wo)} style={{fontSize:11,color:"#999"}}>Actual</button>
+                    <button className="nav-btn" onClick={()=>setApplyWo(wo)} style={{fontSize:11,color:D.text2}}>Actual</button>
                   </div>
                 </div>
               )}
@@ -2659,27 +3219,27 @@ function TemplateModal({ templates, setTemplates, wo, monthRef, currentWeekLabel
                   <span className="lbl">Mes</span>
                   <div style={{display:"flex",alignItems:"center",gap:8,marginTop:6}}>
                     <button className="nav-btn" onClick={()=>setApplyMonth(m=>{ const d=new Date(m.y,m.m-1,1); return{y:d.getFullYear(),m:d.getMonth()}; })}>‹</button>
-                    <span style={{flex:1,textAlign:"center",fontSize:13,fontWeight:500,color:"#333"}}>{["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"][applyMonth.m]} {applyMonth.y}</span>
+                    <span style={{flex:1,textAlign:"center",fontSize:13,fontWeight:500,color:D.text}}>{MONTH_NAMES[applyMonth.m]} {applyMonth.y}</span>
                     <button className="nav-btn" onClick={()=>setApplyMonth(m=>{ const d=new Date(m.y,m.m+1,1); return{y:d.getFullYear(),m:d.getMonth()}; })}>›</button>
-                    <button className="nav-btn" onClick={()=>setApplyMonth({y:today.getFullYear(),m:today.getMonth()})} style={{fontSize:11,color:"#999"}}>Actual</button>
+                    <button className="nav-btn" onClick={()=>setApplyMonth({y:today.getFullYear(),m:today.getMonth()})} style={{fontSize:11,color:D.text2}}>Actual</button>
                   </div>
-                  <div style={{fontSize:11,color:"#AAA",marginTop:8}}>Se aplicará el mismo horario a todas las semanas del mes.</div>
+                  <div style={{fontSize:11,color:D.text3,marginTop:8}}>Se aplicará el mismo horario a todas las semanas del mes.</div>
                 </div>
               )}
 
               {/* Confirm warning */}
               {selTpl && (
-                <div style={{marginTop:16,padding:"10px 12px",borderRadius:7,background:"#FFFBF0",border:"1px solid #FDE68A"}}>
-                  <div style={{fontSize:12,color:"#92400E"}}>
-                    ⚠ Esto <strong>sobreescribirá</strong> los turnos ya asignados en {applyMode==="week"?`la semana del ${weekLabel(applyWo)}`:`${["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"][applyMonth.m]} ${applyMonth.y}`}.
+                <div style={{marginTop:16,padding:"10px 12px",borderRadius:7,background:dark?"#332B0A":"#FFFBF0",border:`1px solid ${dark?"#5C4C10":"#FDE68A"}`}}>
+                  <div style={{fontSize:12,color:dark?"#E8C860":"#92400E"}}>
+                    ⚠ Esto <strong>sobreescribirá</strong> los turnos ya asignados en {applyMode==="week"?`la semana del ${weekLabel(applyWo)}`:`${MONTH_NAMES[applyMonth.m]} ${applyMonth.y}`}.
                   </div>
                 </div>
               )}
 
               <div style={{display:"flex",gap:8,marginTop:16}}>
-                <button className="btn" onClick={()=>setView("list")} style={{flex:1,background:"#F3F4F6",color:"#555",padding:"9px",borderRadius:7,fontSize:13}}>Cancelar</button>
+                <button className="btn" onClick={()=>setView("list")} style={{flex:1,background:D.bg3,color:D.text,padding:"9px",borderRadius:7,fontSize:13,border:`1px solid ${D.border}`}}>Cancelar</button>
                 <button className="btn" onClick={doApply} disabled={!selTpl}
-                  style={{flex:2,background:selTpl?"#111":"#E0E0E0",color:selTpl?"#fff":"#AAA",padding:"9px",borderRadius:7,fontSize:13,fontWeight:500,cursor:selTpl?"pointer":"not-allowed",transition:"all .15s"}}>
+                  style={{flex:2,background:selTpl?D.tabActive:D.bg3,color:selTpl?D.tabActiveText:D.text3,padding:"9px",borderRadius:7,fontSize:13,fontWeight:500,cursor:selTpl?"pointer":"not-allowed",border:selTpl?"none":`1px solid ${D.border}`}}>
                   Aplicar plantilla
                 </button>
               </div>
@@ -2700,18 +3260,15 @@ function CellTag({ val, shifts, dark }) {
   if(!val) return null;
   if(isSpec(val)){
     const st=getSpec(val);
-    return <div draggable="false" style={{background:dark?`${st.color}28`:st.bg,border:`1px solid ${dark?st.color+"55":st.border}`,borderRadius:6,padding:"4px 7px",userSelect:"none"}}>
+    return <div draggable="false" style={{background:dark?`${st.color}28`:st.bg,border:`1px solid ${dark?st.color+"55":st.border}`,borderRadius:6,padding:"4px 7px",userSelect:"none",height:"100%",display:"flex",alignItems:"center"}}>
       <div style={{fontSize:10,fontWeight:600,color:dark?lighten(st.color):st.color,lineHeight:1.3}}>{st.label}</div>
-      <div style={{fontSize:9,marginTop:1}}>&nbsp;</div>
     </div>;
   }
   const s=shifts.find(x=>x.id===val);
   if(!s) return null;
-  const nameColor = dark ? lighten(s.color) : darken(s.color);
-  const timeColor = dark ? `${lighten(s.color)}BB` : `${darken(s.color)}99`;
-  return <div draggable="false" style={{background:dark?`${s.color}28`:`${s.color}14`,border:`1px solid ${dark?s.color+"55":`${s.color}35`}`,borderRadius:6,padding:"4px 7px",userSelect:"none"}}>
-    <div style={{fontSize:10,fontWeight:700,color:nameColor,lineHeight:1.3}}>{s.name}</div>
-    <div style={{fontSize:9,fontWeight:500,color:timeColor,marginTop:1}}>{s.start}–{s.end}</div>
+  const timeColor = dark ? lighten(s.color) : darken(s.color);
+  return <div draggable="false" style={{background:dark?`${s.color}28`:`${s.color}14`,border:`1px solid ${dark?s.color+"55":`${s.color}35`}`,borderRadius:6,padding:"4px 7px",userSelect:"none",height:"100%",display:"flex",alignItems:"center"}}>
+    <div style={{fontSize:12,fontWeight:700,color:timeColor,lineHeight:1.3}}>{s.start}–{s.end}</div>
   </div>;
 }
 
