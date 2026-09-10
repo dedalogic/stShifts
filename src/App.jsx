@@ -456,6 +456,25 @@ function generateWeekProposal(schedule, users, shifts, customRules, currentWeek,
     DAYS.forEach(day => { const v = currentWeek[`${day}-${u.id}`]; if (v) hoursOf[u.id] += getShiftH(v); });
   });
 
+  // Propone "Libre" explícito en el día que cada persona habitualmente
+  // descansa, en vez de dejar la celda en blanco sin explicación. Esto
+  // también protege ese día para que el resto del algoritmo no intente
+  // asignarle un turno de todas formas.
+  const { stats: personStats } = analyzeHistory(schedule);
+  users.forEach(u => {
+    DAYS.forEach(day => {
+      const key = `${day}-${u.id}`;
+      if (currentWeek[key] || proposal[key]) return;
+      const freq = personStats[u.id]?.[day];
+      if (!freq) return;
+      const totalSamples = Object.values(freq).reduce((s,c)=>s+c, 0);
+      const libreCount = freq["__libre__"] || 0;
+      if (totalSamples >= 3 && libreCount / totalSamples >= 0.6) {
+        proposal[key] = "__libre__";
+      }
+    });
+  });
+
   const incompatRules = (customRules || []).filter(r => r.type === "incompatible" && r.active !== false);
   function conflictsWith(uid, day) {
     return incompatRules.some(r => {
@@ -488,19 +507,22 @@ function generateWeekProposal(schedule, users, shifts, customRules, currentWeek,
 
   const areas = [...new Set(users.map(u=>u.area))];
 
-  // Hard minimum coverage floors per company — never go below these regardless
-  // of what the learned history says. Custom coverage rules (if any exist for
-  // this company) always take priority over these defaults.
-  function coverageFloor(day, period) {
+  // Hard minimum coverage floors per company — solo se aplican al área de
+  // cocina (el equipo principal, donde tiene sentido un piso fijo). El resto
+  // de las áreas (Salón, Caja...) usan únicamente el promedio histórico real,
+  // porque forzar el mismo mínimo ahí agota las horas de esas personas antes
+  // de llegar al fin de semana y deja días sin cobertura.
+  function coverageFloor(area, day, period) {
+    if (area !== (company?.kitchenArea || "Cocina")) return 0;
     const isWeekend = day==="Viernes" || day==="Sábado" || day==="Domingo";
     if (company?.id === "sf") {
       if (period==="am") return 2;
       return isWeekend ? 3 : 2; // Street Flags: 2/2 Lun-Jue, 3 PM Vie-Dom
     }
     if (company?.id === "mf") {
-      return 2; // Mafia: nunca menos de 2 en AM ni PM, todos los días
+      return 2; // Mafia: nunca menos de 2 en AM ni PM, todos los días, en Cocina
     }
-    return 0; // other/custom companies: no hardcoded floor, rely purely on learned history
+    return 0;
   }
 
   areas.forEach(area => {
@@ -509,7 +531,7 @@ function generateWeekProposal(schedule, users, shifts, customRules, currentWeek,
       const need = typicalNeed(demand, area, day, dates[di]);
 
       ["am","pm"].forEach(period => {
-        const floor = coverageFloor(day, period);
+        const floor = coverageFloor(area, day, period);
         const target = Math.max(need[period].count, floor);
         if (!target) return;
         const fallbackShift = shifts.find(x => period==="pm" ? t2m(x.start)/60>=13 : t2m(x.start)/60<13);
@@ -1028,7 +1050,7 @@ function AppInner() {
   const assignM=(date,uid,val)=>setCell(wKeyFromDate(date),DAYS[(date.getDay()+6)%7],uid,val);
   const removeM=(date,uid)=>delCell(wKeyFromDate(date),DAYS[(date.getDay()+6)%7],uid);
 
-  const userHoursW=uid=>{ let t=0; DAYS.forEach(d=>{ const c=wSched[`${d}-${uid}`]; if(!c||isSpec(c)) return; const s=shifts.find(x=>x.id===c); if(s) t+=shiftH(s); }); return t; };
+  const userHoursW=uid=>{ let t=0; DAYS.forEach(d=>{ const c=wSched[`${d}-${uid}`]||(proposal&&proposal[`${d}-${uid}`]); if(!c||isSpec(c)) return; const s=shifts.find(x=>x.id===c); if(s) t+=shiftH(s); }); return t; };
 
   // ── templates ──
   function saveAsTemplate(name){
@@ -1592,7 +1614,7 @@ function AppInner() {
                   const isFixed=FIXED_USERS.some(f=>f.id===u.id);
                   return (
                     <div key={u.id} className="urow" style={{display:"flex",alignItems:"center",gap:12,padding:"10px 14px",borderRadius:8,marginBottom:3,border:`1px solid ${D.border}`,cursor:"pointer",background:D.bg}} onClick={()=>setProfileUser(u)}>
-                      <Av name={u.name} color={u.color} size={32}/>
+                      <Av name={u.name} color={u.color} size={32} photo={u.photo}/>
                       <div style={{flex:1}}>
                         <div style={{fontSize:14,fontWeight:500,color:D.text}}>{u.name}</div>
                         <div style={{fontSize:12,color:D.text2}}>{u.role||"Sin cargo"}</div>
@@ -1833,7 +1855,7 @@ function AppInner() {
         if(d.t==="user"){
           const u=users.find(x=>x.id===d.uid);
           content=<div style={{display:"flex",alignItems:"center",gap:7,padding:"5px 9px",background:D.bg2,border:`1px solid ${D.border}`,borderRadius:7,whiteSpace:"nowrap"}}>
-            <Av name={u?.name||"?"} color={u?.color||"#888"} size={20}/>
+            <Av name={u?.name||"?"} color={u?.color||"#888"} size={20} photo={u?.photo}/>
             <span style={{fontSize:12,fontWeight:500,color:D.text}}>{u?.name||""}</span>
           </div>;
         } else if(d.t==="shift"){
@@ -1947,7 +1969,7 @@ function WeekGrid({ users, shifts, dates, wSched, dragging, dragOver, setPicker,
                 <div style={{display:"flex",alignItems:"center",gap:8}}>
                   <div onPointerDown={e=>startDrag(e,{t:"user",uid:u.id})} className="no-select"
                     style={{cursor:"grab",flexShrink:0}}>
-                    <Av name={u.name} color={u.color} size={22}/>
+                    <Av name={u.name} color={u.color} size={22} photo={u.photo}/>
                   </div>
                   <div style={{cursor:"pointer",minWidth:0}} onClick={()=>onUserClick(u)}>
                     <div style={{fontSize:12,fontWeight:500,color:D.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{u.name}</div>
@@ -2452,7 +2474,7 @@ function TasksTab({ users, schedule, dark, company, pfx }) {
                       : <div style={{display:"flex",alignItems:"center",gap:10}}>
                           {assignedStillWorking
                             ? <div style={{display:"flex",alignItems:"center",gap:8,flex:1}}>
-                                <Av name={assigned.name} color={assigned.color} size={22}/>
+                                <Av name={assigned.name} color={assigned.color} size={22} photo={assigned.photo}/>
                                 <span style={{fontSize:12,fontWeight:500,color:D.text}}>{assigned.name}</span>
                                 <button className="btn" onClick={()=>setColDay(dateKey,null)}
                                   style={{marginLeft:"auto",color:D.text2,fontSize:12,background:"none",padding:"0 4px"}}>×</button>
@@ -2502,7 +2524,7 @@ function TasksTab({ users, schedule, dark, company, pfx }) {
                     {u
                       ? <div draggable onDragStart={()=>setDragUid(u.id)} onDragEnd={()=>setDragUid(null)}
                           style={{display:"inline-flex",alignItems:"center",gap:8,cursor:"grab",padding:"2px 6px 2px 2px",borderRadius:6,border:`1px solid ${dragUid===u.id?D.tabActive:"transparent"}`,background:dragUid===u.id?(dark?"#1A2A3A":"#EEF3FF"):"transparent",userSelect:"none"}}>
-                          <Av name={u.name} color={u.color} size={22}/>
+                          <Av name={u.name} color={u.color} size={22} photo={u.photo}/>
                           <span style={{fontWeight:500,color:D.text}}>{u.name}</span>
                         </div>
                       : <span style={{color:D.text3,fontSize:11}}>Arrastra una persona aquí</span>}
@@ -2558,7 +2580,7 @@ function TasksTab({ users, schedule, dark, company, pfx }) {
                     {u
                       ? <div draggable onDragStart={()=>setDragUid(u.id)} onDragEnd={()=>setDragUid(null)}
                           style={{display:"inline-flex",alignItems:"center",gap:8,cursor:"grab",padding:"2px 6px 2px 2px",borderRadius:6,border:`1px solid ${dragUid===u.id?D.tabActive:"transparent"}`,background:dragUid===u.id?(dark?"#1A2A3A":"#EEF3FF"):"transparent",userSelect:"none"}}>
-                          <Av name={u.name} color={u.color} size={22}/>
+                          <Av name={u.name} color={u.color} size={22} photo={u.photo}/>
                           <span style={{fontWeight:500,color:D.text}}>{u.name}</span>
                         </div>
                       : <span style={{color:D.text3,fontSize:11}}>Arrastra una persona aquí</span>}
@@ -2713,7 +2735,7 @@ function ProfileModal({ user, users, shifts, schedule, dark, company, pfx, onClo
       <div onClick={e=>e.stopPropagation()} style={{background:D.bg2,borderRadius:14,padding:0,width:520,maxHeight:"88vh",overflowY:"auto",boxShadow:"0 12px 40px rgba(0,0,0,.25)",border:`1px solid ${D.border}`}}>
         {/* Header */}
         <div style={{padding:"22px 24px 18px",borderBottom:`1px solid ${D.border}`,display:"flex",alignItems:"center",gap:14}}>
-          <Av name={user.name} color={user.color} size={44}/>
+          <Av name={user.name} color={user.color} size={44} photo={user.photo}/>
           <div style={{flex:1}}>
             <div style={{fontSize:17,fontWeight:700,color:D.text}}>{user.name}</div>
             <div style={{fontSize:12,color:D.text2,marginTop:2}}>{user.role||"Sin cargo"} · {user.area}</div>
@@ -3316,7 +3338,10 @@ function TemplateModal({ templates, setTemplates, wo, monthRef, currentWeekLabel
 }
 
 // ─── SMALL SHARED ─────────────────────────────────────────────────────────────
-function Av({ name, color, size=24 }) {
+function Av({ name, color, size=24, photo }) {
+  if (photo) {
+    return <div style={{width:size,height:size,borderRadius:"50%",backgroundImage:`url(${photo})`,backgroundSize:"cover",backgroundPosition:"center",flexShrink:0}}/>;
+  }
   return <div style={{width:size,height:size,borderRadius:"50%",background:color,display:"flex",alignItems:"center",justifyContent:"center",fontSize:size*0.4,fontWeight:700,color:"#fff",flexShrink:0}}>{name.charAt(0).toUpperCase()}</div>;
 }
 
@@ -3386,10 +3411,38 @@ function UserModal({ initial, isFixed, dark, onSave, onClose, companyAreas }) {
   const [role,setRole]=useState(initial?.role||"");
   const [area,setArea]=useState(initial?.area||areas[0]||"");
   const [color,setColor]=useState(initial?.color||PALETTE[0]);
+  const [photo,setPhoto]=useState(initial?.photo||null);
+  const [uploading,setUploading]=useState(false);
   const canSave = name.trim() && role.trim() && area;
+
+  async function handlePhotoUpload(e){
+    const file = e.target.files[0];
+    if(!file) return;
+    setUploading(true);
+    try{
+      const ext = file.name.split('.').pop();
+      const path = `avatars/${crypto.randomUUID()}.${ext}`;
+      const { error } = await supabase.storage.from('avatars').upload(path, file, { cacheControl:'3600', upsert:false });
+      if(error){ alert("No se pudo subir la foto: "+error.message); setUploading(false); return; }
+      const { data } = supabase.storage.from('avatars').getPublicUrl(path);
+      setPhoto(data.publicUrl);
+    } catch(err){ alert("Error al subir la foto."); }
+    setUploading(false);
+  }
+
   return (
     <div className="modal-bg" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()} style={{background:D.bg2,border:`1px solid ${D.border}`}}>
       <div style={{fontSize:15,fontWeight:700,color:D.text,marginBottom:20}}>{initial?"Editar persona":"Nueva persona"}</div>
+
+      <span className="lbl">Foto</span>
+      <div style={{display:"flex",alignItems:"center",gap:12,marginTop:6,marginBottom:6}}>
+        <label style={{width:56,height:56,borderRadius:"50%",background:photo?`url(${photo}) center/cover`:D.bg3,border:`1px solid ${D.border}`,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:D.text3,flexShrink:0}}>
+          {!photo && (uploading?"...":"+ foto")}
+          <input type="file" accept="image/*" onChange={handlePhotoUpload} style={{display:"none"}}/>
+        </label>
+        {photo && <button className="btn" onClick={()=>setPhoto(null)} style={{fontSize:12,color:D.text2,background:"none"}}>Quitar foto</button>}
+      </div>
+
       <span className="lbl">Nombre</span>
       <input value={name} onChange={e=>setName(e.target.value)} placeholder="Nombre completo" autoFocus/>
       <span className="lbl">Cargo</span>
@@ -3405,7 +3458,7 @@ function UserModal({ initial, isFixed, dark, onSave, onClose, companyAreas }) {
       {!canSave && <p style={{fontSize:11,color:"#9B2335",marginTop:10}}>Nombre, cargo y área son obligatorios.</p>}
       <div style={{display:"flex",gap:8,marginTop:16}}>
         <button className="btn" onClick={onClose} style={{flex:1,background:D.bg3,color:D.text,padding:"9px",borderRadius:6,fontSize:13}}>Cancelar</button>
-        <button className="btn" onClick={()=>{ if(canSave) onSave({name:name.trim(),role:role.trim(),area,color}); }}
+        <button className="btn" onClick={()=>{ if(canSave) onSave({name:name.trim(),role:role.trim(),area,color,photo}); }}
           style={{flex:1,background:canSave?D.tabActive:D.bg3,color:canSave?D.tabActiveText:D.text2,padding:"9px",borderRadius:6,fontSize:13,fontWeight:500,opacity:canSave?1:.5}}>
           {initial?"Guardar":"Agregar"}
         </button>
