@@ -561,9 +561,22 @@ function generateWeekProposal(schedule, users, shifts, customRules, currentWeek,
 
           if (!candidates.length) break; // can't fully cover — will show up as an alert
           const c = candidates[0];
-          const h = getShiftH(shiftVal);
+          // Prefiere el turno específico que ESTA persona suele trabajar ese
+          // día (si el historial lo muestra con claridad), en vez del turno
+          // genérico más común del área en general.
+          let personalVal = null;
+          const pFreq = personStats[c.u.id]?.[day];
+          if (pFreq) {
+            const pSorted = Object.entries(pFreq).filter(([v]) => {
+              if (isSpec(v)) return false;
+              return isPMShift(v) === (period==="pm");
+            }).sort((a,b)=>b[1]-a[1]);
+            if (pSorted.length && pSorted[0][1] >= 2) personalVal = pSorted[0][0];
+          }
+          const finalVal = personalVal || shiftVal;
+          const h = getShiftH(finalVal);
           if (hoursOf[c.u.id] + h > contractHours(c.u)) break;
-          proposal[`${day}-${c.u.id}`] = shiftVal;
+          proposal[`${day}-${c.u.id}`] = finalVal;
           hoursOf[c.u.id] += h;
         }
       });
